@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Kundenstatistiken</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+
+<div class="container mt-5">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Kundenstatistiken</h1>
+        <div>
+            <a class="btn btn-outline-secondary me-2" href="{% url 'admin_dashboard' %}">Dashboard</a>
+            <a class="btn btn-outline-danger" href="{% url 'account_logout' %}">Logout</a>
+        </div>
+    </div>
+
+    <!-- Gesamtanzahl -->
+    <div class="mb-4">
+        <h3>Gesamtanzahl Kunden: {{ total_customers }}</h3>
+    </div>
+
+    <!-- Charts Grid -->
+    <div class="row g-4">
+
+        <!-- Kunden nach Titel -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <h4>Kunden nach Titel</h4>
+                <div id="title-chart">
+                    {{ title_chart|safe }}
+                </div>
+                <a href="{% url 'customer_stats_pdf' 'title' %}" class="btn btn-outline-dark mt-2">
+                    <i class="fas fa-file-pdf"></i> PDF herunterladen
+                </a>
+            </div>
+        </div>
+
+        <!-- Kunden nach Geschlecht -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <h4>Kunden nach Geschlecht</h4>
+                <div id="gender-chart">
+                    {{ gender_chart|safe }}
+                </div>
+                <a href="{% url 'customer_stats_pdf' 'gender'  %}" class="btn btn-outline-dark mt-2">
+                    <i class="fas fa-file-pdf"></i> PDF herunterladen
+                </a>
+            </div>
+        </div>
+
+        <!-- Kunden pro Land -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <h4>Kunden pro Land</h4>
+                <div id="country-chart">
+                    {{ country_chart|safe }}
+                </div>
+                <a href="{% url 'customer_stats_pdf' 'country' %}" class="btn btn-outline-dark mt-2">
+                    <i class="fas fa-file-pdf"></i> PDF herunterladen
+                </a>
+            </div>
+        </div>
+
+        <!-- Altersverteilung -->
+        <div class="col-md-6">
+            <div class="card p-3">
+                <h4>Altersverteilung</h4>
+                <div id="age-chart">
+                    {{ age_chart|safe }}
+                </div>
+                <a href="{% url 'customer_stats_pdf' 'age' %}" class="btn btn-outline-dark mt-2">
+                    <i class="fas fa-file-pdf"></i> PDF herunterladen
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
