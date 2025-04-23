@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils.timezone import now
 from phonenumber_field.modelfields import PhoneNumberField
 from django.utils.translation import gettext_lazy as _
 
@@ -26,6 +27,12 @@ class Address(models.Model):
 
 class Customer(models.Model):
     customer_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    class GenderChoice(models.TextChoices):
+        MALE = "Male", _("Herr")
+        FEMALE = "Female", _("Frau")
+        OTHERS = "Other", _("Genderneutral")
+
+    gender = models.CharField(max_length=10, unique=False, primary_key=False, choices=GenderChoice.choices, blank=False)
     first_name = models.CharField(max_length=30, unique=False, primary_key=False)
     second_name = models.CharField(max_length=100, unique=False, primary_key=False)
 
@@ -38,6 +45,10 @@ class Customer(models.Model):
     title = models.CharField(max_length=100, unique=False, primary_key=False, choices=TitleChoices.choices, blank=True)
     birthdate = models.ForeignKey(Birthday, on_delete=models.CASCADE)
     address = models.ForeignKey(Address, on_delete=models.CASCADE)
+
+    def calculate_age(self):
+        today = now().date()
+        return today.year - self.birthdate.birth_date.year - ((today.month, today.day) < (self.birthdate.birth_date.month, self.birthdate.birth_date.day))
 
 class CustomerContact(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)

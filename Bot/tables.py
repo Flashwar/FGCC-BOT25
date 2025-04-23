@@ -15,8 +15,9 @@ class CustomerTable(tables.Table):
         fields = ()
 
     def render_full_name(self, record):
-        title = f"{record.title} " if record.title else ""
-        return f"{title}{record.first_name} {record.second_name}"
+        title = f"{record.title}" if record.title else ""
+        gender = f"{record.gender}" if record.gender else ""
+        return f"{gender} {title} {record.first_name} {record.second_name}"
 
     def render_address(self, record):
         addr = record.address
