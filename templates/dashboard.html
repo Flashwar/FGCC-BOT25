@@ -27,7 +27,7 @@
     <a class="btn btn-outline-success" href="?{% if request.GET %}{{ request.GET.urlencode }}&{% endif %}_export=json">JSON</a>
 </div>
             {% if request.GET %}
-                <div class="collapse show" id="filterCollapse">
+                <div class="collapse" id="filterCollapse">
             {% else %}
                 <div class="collapse" id="filterCollapse">
             {% endif %}

@@ -3,20 +3,22 @@ import io
 from allauth.account.views import LoginView
 from django.contrib import messages
 from django.contrib.auth.decorators import user_passes_test
-from django.http import HttpResponse, FileResponse, HttpResponseBadRequest
+from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django_tables2 import RequestConfig
 from django_tables2.export import TableExport
 from plotly.offline import plot
-from django.db.models import Count
 from django.shortcuts import render
 from weasyprint import HTML
+import plotly.io as pio
 
-import Bot.charts
-from Bot import charts
+from .services import CustomerService
+from .statistics import Statistics
+from injector import inject
 from Bot.filters import CustomerFilter
 from Bot.models import Customer
 from Bot.tables import CustomerTable
+
 
 class SuperuserLoginView(LoginView):
     def form_valid(self, form):
@@ -32,10 +34,9 @@ def superuser_required(view_func):
 
 
 @superuser_required
-def admin_dashboard(request):
-    queryset = Customer.objects.select_related(
-        'birthdate', 'address__street', 'address__place__country'
-    ).all()
+@inject
+def admin_dashboard(request, customer_service: CustomerService):
+    queryset = customer_service.get_all_customers_with_relations()
     f = CustomerFilter(request.GET, queryset=queryset)
     table = CustomerTable(f.qs)
     RequestConfig(request, paginate={"per_page": 10}).configure(table)
@@ -48,27 +49,30 @@ def admin_dashboard(request):
     return render(request, 'dashboard.html', {'table': table, 'filter': f})
 
 
-@superuser_required
-def customer_stats(request):
-    total_customers = Customer.objects.count()
 
-    # Titel
-    title_fig = Bot.charts.get_title_chart()
+@superuser_required
+@inject
+def customer_stats(request, statistics: Statistics):
+
+    total_customers = statistics.get_total_customers()
+
+    # Titel Chart
+    title_fig = statistics.get_title_chart()
     title_chart = plot(title_fig, output_type='div', include_plotlyjs=False)
     request.session['title_fig'] = title_fig.to_json()
 
-    # Geschlecht
-    gender_fig = Bot.charts.get_gender_chart()
+    # Geschlecht Chart
+    gender_fig = statistics.get_gender_chart()
     gender_chart = plot(gender_fig, output_type='div', include_plotlyjs=False)
     request.session['gender_fig'] = gender_fig.to_json()
 
-    # Land
-    country_fig = Bot.charts.get_country_chart()
+    # Land Chart
+    country_fig = statistics.get_country_chart()
     country_chart = plot(country_fig, output_type='div', include_plotlyjs=False)
     request.session['country_fig'] = country_fig.to_json()
 
-    # Alter
-    age_fig = Bot.charts.get_age_chart()
+    # Alter Chart
+    age_fig = statistics.get_age_chart()
     age_chart = plot(age_fig, output_type='div', include_plotlyjs=False)
     request.session['age_fig'] = age_fig.to_json()
 
@@ -80,17 +84,13 @@ def customer_stats(request):
         'age_chart': age_chart
     })
 
-
-def generate_pdf_from_plotly(fig, title, filename):
-    # get the total number of customers
-    total_customers = Customer.objects.count()
-
+def generate_pdf_from_plotly(fig, title, filename, total_customers):
     # Export Plotly figure to PNG
     img_bytes = io.BytesIO()
     fig.write_image(img_bytes, format='png', width=800, height=500)
     img_bytes.seek(0)
 
-    # Convert PNG to base64 for embedding in HTML
+    # Convert PNG to base64
     encoded = base64.b64encode(img_bytes.read()).decode()
     image_uri = f'data:image/png;base64,{encoded}'
 
@@ -103,27 +103,60 @@ def generate_pdf_from_plotly(fig, title, filename):
 
     # Generate PDF
     pdf = HTML(string=html_string).write_pdf()
-
     return HttpResponse(pdf, content_type='application/pdf', headers={
         'Content-Disposition': f'attachment; filename="{filename}"'
     })
 
-def customer_stats_pdf(request, chart_type: str):
-    print(chart_type)
-    fig = None
+def generate_pdf_from_charts(chart_data, total_customers):
+    charts = []
+    for title, fig in chart_data:
+        image_bytes = pio.to_image(fig, format="png", width=800, height=500)
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        charts.append({
+            "title": title,
+            "image_base64": base64_image
+        })
+
+    html_string = render_to_string('pdf_stats_template.html', {
+        'charts': charts,
+        'total_customers': total_customers,
+    })
+
+    pdf = HTML(string=html_string).write_pdf()
+    return HttpResponse(
+        pdf,
+        content_type='application/pdf',
+        headers={'Content-Disposition': 'attachment; filename="kunden_statistiken_gesamt.pdf"'}
+    )
+
+@inject
+def customer_stats_pdf(request, chart_type: str, statistics: Statistics, customer_service: CustomerService):
+    total_customers = customer_service.get_total_count()
+    chart_data = [
+        ("Titelverteilung", statistics.get_title_chart()),
+        ("Geschlechterverteilung", statistics.get_gender_chart()),
+        ("Kunden pro Land", statistics.get_country_chart()),
+        ("Altersverteilung", statistics.get_age_chart()),
+    ]
+
     match chart_type:
         case "title":
-            fig = charts.get_title_chart()
-            return generate_pdf_from_plotly(fig, "Titelverteilung", "titel_statistik.pdf")
+            return generate_pdf_from_plotly(
+                statistics.get_title_chart(), "Titelverteilung", "titel_statistik.pdf", total_customers
+            )
         case "gender":
-            fig = charts.get_gender_chart()
-            return generate_pdf_from_plotly(fig, "Geschlechterverteilung", "geschlecht_statistik.pdf")
+            return generate_pdf_from_plotly(
+                statistics.get_gender_chart(), "Geschlechterverteilung", "geschlecht_statistik.pdf", total_customers
+            )
         case "country":
-            fig = charts.get_country_chart()
-            return generate_pdf_from_plotly(fig, "Kunden pro Land", "land_statistik.pdf")
+            return generate_pdf_from_plotly(
+                statistics.get_country_chart(), "Kunden pro Land", "land_statistik.pdf", total_customers
+            )
         case "age":
-            fig = charts.get_age_chart()
-            return generate_pdf_from_plotly(fig, "Altersverteilung", "alters_statistik.pdf")
+            return generate_pdf_from_plotly(
+                statistics.get_age_chart(), "Altersverteilung", "alters_statistik.pdf", total_customers
+            )
+        case "all":
+            return generate_pdf_from_charts(chart_data, total_customers)
         case _:
             return HttpResponse("Ungültiger Chart-Typ", status=400)
-

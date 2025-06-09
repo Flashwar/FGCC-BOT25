@@ -1,5 +1,5 @@
 import django_tables2 as tables
-from Bot.models import Customer, CustomerContact, Birthday
+from Bot.models import Customer, CustomerContact
 
 
 class CustomerTable(tables.Table):
@@ -7,17 +7,17 @@ class CustomerTable(tables.Table):
     address = tables.Column(empty_values=(), verbose_name="Adresse")
     email = tables.Column(empty_values=(), verbose_name="E-Mail")
     phone = tables.Column(empty_values=(), verbose_name="Telefon")
-    birthday = tables.Column(accessor='birthdate.birth_date', verbose_name="Geburtstag")
+    birthday = tables.Column(accessor='birth_date', verbose_name="Geburtstag")
 
     class Meta:
         model = Customer
-        template_name = "django_tables2/bootstrap.html"
+        template_name = "django_tables2/bootstrap5.html"
         fields = ()
 
     def render_full_name(self, record):
         title = f"{record.title}" if record.title else ""
         gender = f"{record.gender}" if record.gender else ""
-        return f"{gender} {title} {record.first_name} {record.second_name}"
+        return f"{title} {record.first_name} {record.second_name}"
 
     def render_address(self, record):
         addr = record.address

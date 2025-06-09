@@ -40,15 +40,22 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'Bot',
+    'Bot.apps.BotConfig',
     'django_tables2',
     'django_filters',
     'phonenumber_field',
     'django.contrib.sites',
     'allauth',
     'allauth.account',
+    'django_injector',
     'widget_tweaks',
+    'mssql',
+    "django_extensions",
 
+]
+
+INJECTOR_MODULES = [
+    'Bot.injector.AppModule',
 ]
 
 MIDDLEWARE = [
@@ -94,11 +101,19 @@ WSGI_APPLICATION = 'FCCSemesterAufgabe.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'mssql', # Oder 'sql_server.pyodbc' wenn du django-pyodbc-azure nutzt
+        'NAME': os.getenv("DB_NAME"),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORT'),
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT'),
+        'OPTIONS': {
+            'driver': 'ODBC Driver 18 for SQL Server',
+            'encrypt': True,
+            'trust_server_certificate': False,
+        },
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -117,6 +132,7 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
 
 
 # Internationalization
@@ -144,16 +160,22 @@ STATICFILES_DIRS=[
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
+# Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 SITE_ID = 1
 
-LOGIN_REDIRECT_URL = '/admin-board/'
+LOGIN_REDIRECT_URL = '/adminboard/'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/accounts/login/'
 ACCOUNT_LOGOUT_ON_GET = True
 
 ACCOUNT_LOGIN_METHODS = {'username'}
 ACCOUNT_SIGNUP_FIELDS = ['email', 'username*', 'password1*', 'password2*']
 
-
 DATE_FORMAT = "%m/%d/%Y"
+
+GRAPH_MODELS ={
+    'all_applications': False,
+    'graph_models': True,
+     }
+

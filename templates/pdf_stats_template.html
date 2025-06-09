@@ -2,20 +2,30 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>{{ title }}</title>
+    <title>{{ title|default:"Kundenstatistik" }}</title>
     <style>
         body { font-family: Arial, sans-serif; padding: 2rem; }
         h1, h2 { text-align: center; }
-        .chart { text-align: center; margin-top: 30px; }
-        img { max-width: 100%; }
+        .chart { text-align: center; margin-top: 30px; page-break-after: always; }
+        .chart img { max-width: 100%; height: auto; }
     </style>
 </head>
 <body>
-    <h1>{{ title }}</h1>
+    <h1>Kundenstatistik</h1>
     <h2>Gesamtanzahl Kunden: {{ total_customers }}</h2>
 
-    <div class="chart">
-        <img src="{{ image_uri }}" alt="Diagramm">
-    </div>
+    {% if charts %}
+        {% for chart in charts %}
+            <div class="chart">
+                <h3>{{ chart.title }}</h3>
+                <img src="data:image/png;base64,{{ chart.image_base64 }}" alt="{{ chart.title }}">
+            </div>
+        {% endfor %}
+    {% else %}
+        <div class="chart">
+            <h3>{{ title }}</h3>
+            <img src="{{ image_uri }}" alt="Diagramm">
+        </div>
+    {% endif %}
 </body>
 </html>
