@@ -86,8 +86,13 @@ jobs:
       - name: Set Azure App Settings
         run: |
           az webapp config appsettings set \
-            --name ${{ vars.app_name }} \
-            --resource-group ${{ secrets.RESSOURCE_GROUP_NAME }} \
-            --settings AZURE_KEYVAULT_URL=${{ secrets.AZURE_KEYVAULT_URL }}
+          --name "${{ vars.app_name }}" \
+          --resource-group "${{ secrets.RESSOURCE_GROUP_NAME }}" \
+          --settings AZURE_KEYVAULT_URL="${{ secrets.AZURE_KEYVAULT_URL }}"
+      
+
+      - name: Set environment variable to .env file
+        run: |
+            echo "AZURE_KEYVAULT_URL=${{ secrets.AZURE_KEYVAULT_URL }}" >> .env
 
 
