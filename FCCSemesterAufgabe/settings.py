@@ -12,8 +12,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from Bot.azure_keyvault import get_secret_from_keyvault
 
 load_dotenv()
+
+AZURE_KEYVAULT_URL = os.environ.get("AZURE_KEYVAULT_URL")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,13 +26,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv("SECRET_KEY")
+#SECRET_KEY = os.getenv("SECRET_KEY")
+SECRET_KEY = get_secret_from_keyvault("SECRET-KEY", AZURE_KEYVAULT_URL)
+
+
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
+AZURE_BOT_APP_ID = os.getenv('AZURE_BOT_APP_ID')
+AZURE_BOT_APP_SECRET = os.getenv('AZURE_BOT_APP_SECRET')
 
 # Application definition
 
@@ -101,12 +109,12 @@ WSGI_APPLICATION = 'FCCSemesterAufgabe.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'mssql', # Oder 'sql_server.pyodbc' wenn du django-pyodbc-azure nutzt
-        'NAME': os.getenv("DB_NAME"),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORT'),
-        'HOST': os.getenv('DB_HOST'),
-        'PORT': os.getenv('DB_PORT'),
+        'ENGINE': 'mssql',
+        'NAME': get_secret_from_keyvault("DB-NAME", AZURE_KEYVAULT_URL),
+        'USER': get_secret_from_keyvault('DB-USER',AZURE_KEYVAULT_URL),
+        'PASSWORD': get_secret_from_keyvault('DB-PASSWORT',AZURE_KEYVAULT_URL),
+        'HOST': get_secret_from_keyvault('DB-HOST',AZURE_KEYVAULT_URL),
+        'PORT': get_secret_from_keyvault('DB-PORT',AZURE_KEYVAULT_URL),
         'OPTIONS': {
             'driver': 'ODBC Driver 18 for SQL Server',
             'encrypt': True,

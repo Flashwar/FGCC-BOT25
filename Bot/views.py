@@ -3,7 +3,6 @@ import io
 from allauth.account.views import LoginView
 from django.contrib import messages
 from django.contrib.auth.decorators import user_passes_test
-from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django_tables2 import RequestConfig
 from django_tables2.export import TableExport
@@ -11,14 +10,11 @@ from plotly.offline import plot
 from django.shortcuts import render
 from weasyprint import HTML
 import plotly.io as pio
-
 from .services import CustomerService
 from .statistics import Statistics
 from injector import inject
 from Bot.filters import CustomerFilter
-from Bot.models import Customer
 from Bot.tables import CustomerTable
-
 
 class SuperuserLoginView(LoginView):
     def form_valid(self, form):
@@ -160,3 +156,93 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
             return generate_pdf_from_charts(chart_data, total_customers)
         case _:
             return HttpResponse("Ungültiger Chart-Typ", status=400)
+
+
+import sys
+import json
+from http import HTTPStatus
+
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
+
+# Bot Framework Core Imports
+from botbuilder.core import (
+    BotFrameworkAdapter,
+    BotFrameworkAdapterSettings,
+    TurnContext,
+    ConversationState,
+    UserState,
+    MemoryStorage  # WICHTIG: Ersetze dies in Produktion!
+)
+from botbuilder.schema import Activity, ActivityTypes
+
+# Importiere deinen Bot (angenommen, er liegt in 'bot_app/bot.py')
+from .bot import RegistrationBot
+
+# Bot Framework Adapter Einstellungen
+# In Produktion sollten APP_ID und APP_PASSWORD aus Umgebungsvariablen geladen werden.
+# Für lokale Tests kannst du sie leer lassen oder Placeholder verwenden.
+APP_ID = ""  # Ersetze dies mit deiner Microsoft App ID
+APP_PASSWORD = ""  # Ersetze dies mit deinem Microsoft App Password
+
+# Erstelle den Bot Framework Adapter
+SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
+ADAPTER = BotFrameworkAdapter(SETTINGS)
+
+# Speicher für den Zustand.
+# ACHTUNG: MemoryStorage ist NICHT für die Produktion geeignet,
+# da Daten bei jedem Neustart des Servers verloren gehen!
+# Für die Produktion solltest du AzureBlobStorage, CosmosDbStorage etc. verwenden.
+MEMORY = MemoryStorage()
+CONVERSATION_STATE = ConversationState(MEMORY)
+USER_STATE = UserState(MEMORY)
+
+# Erstelle eine Instanz deines Bots
+# Übergib die Zustands-Manager an den Bot
+BOT = RegistrationBot(CONVERSATION_STATE, USER_STATE)
+
+
+# Fehlermanagement für den Adapter
+async def on_error(context: TurnContext, error: Exception):
+    # Dies wird aufgerufen, wenn ein Fehler während der Bot-Verarbeitung auftritt.
+    print(f"\n [on_error] Unbehandelter Fehler: {error}", file=sys.stderr)
+    await context.send_activity("Entschuldigung, es ist ein Fehler aufgetreten und der Bot muss neu starten.")
+
+    # Optional: Den Zustand löschen, um den Bot zurückzusetzen, wenn ein Fehler auftritt
+    await CONVERSATION_STATE.delete(context)
+    await USER_STATE.delete(context)
+
+
+# Registriere den Fehlerhandler beim Adapter
+ADAPTER.on_turn_error = on_error
+
+
+@csrf_exempt
+async def messages(request):
+    """
+    Diese Django-View empfängt eingehende HTTP-POST-Anfragen vom Bot Framework Connector.
+    """
+    if request.method != 'POST':
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+
+    # Überprüfe den Content-Type des Requests
+    if "application/json" not in request.headers.get("Content-Type", ""):
+        return HttpResponse(status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+
+    # Lese den Request-Body und deserialisiere ihn in ein Activity-Objekt
+    body = request.body.decode('utf-8')
+    activity = Activity().deserialize(json.loads(body))
+
+    # Hole den Authorization-Header (wichtig für die Authentifizierung bei Azure Bot Service)
+    auth_header = request.headers.get("Authorization", "")
+
+    try:
+        # Der Adapter verarbeitet die eingehende Aktivität und ruft die Bot-Logik auf.
+        # Die Methode BOT.on_turn wird pro eingehender Aktivität aufgerufen.
+        await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
+        return HttpResponse(status=HTTPStatus.OK)
+
+    except Exception as e:
+        # Fange jegliche Fehler ab, die vor oder während der Adapter-Verarbeitung auftreten könnten.
+        print(f"Fehler bei der Verarbeitung der Bot-Aktivität: {e}", file=sys.stderr)
+        return HttpResponse(status=HTTPStatus.INTERNAL_SERVER_ERROR, text=str(e))

@@ -59,8 +59,9 @@ class Customer(models.Model):
         MAGISTER = "Mag.", _("Mag.")
         LICENTIATE = "Lic.", _("Lic.")
         PHD = "Ph.D.", _("Ph.D.")
+        NONE = '', _('Kein Titel')
 
-    title = models.CharField(max_length=100, unique=False, primary_key=False, choices=TitleChoices.choices, blank=True)
+    title = models.CharField(max_length=100, unique=False, primary_key=False, choices=TitleChoices.choices, blank=True, default=TitleChoices.NONE)
     address = models.ForeignKey(Address, on_delete=models.CASCADE)
 
     def calculate_age(self):
