@@ -14,6 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: read #This is required for actions/checkout
     env:
       AZURE_KEYVAULT_URL: ${{ secrets.AZURE_KEYVAULT_URL }}
