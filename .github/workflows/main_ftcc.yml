@@ -26,9 +26,9 @@ jobs:
       - name: Login to Azure CLI
         uses: azure/login@v2
         with:
-            client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_326B7856498743A2B828B3F3BABABB35 }}
-            tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_7B013E8A26E2442AA8D9B84B3B28C841 }}
-            subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_4EF2626E6B1B479C831DC264D1B2ADC6 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_326B7856498743A2B828B3F3BABABB35 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_7B013E8A26E2442AA8D9B84B3B28C841 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_4EF2626E6B1B479C831DC264D1B2ADC6 }}
 
       - name: Set up Python version
         uses: actions/setup-python@v5
@@ -42,6 +42,19 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install dependencies for WeaslyPrint
+        run: |
+          apt-get update
+          apt install -y \
+          libpango-1.0-0 \
+          libharfbuzz0b \
+          libpangoft2-1.0-0 \
+          libharfbuzz-subset0 \
+          libffi-dev \
+          libjpeg-dev \
+          libopenjp2-7-dev
+
 
       - name: Run collectstatic
         run: python manage.py collectstatic
@@ -98,10 +111,10 @@ jobs:
           --name "${{ vars.app_name }}" \
           --resource-group "${{ secrets.RESSOURCE_GROUP_NAME }}" \
           --settings AZURE_KEYVAULT_URL="${{ secrets.AZURE_KEYVAULT_URL }}"
-      
+
 
       - name: Set environment variable to .env file
         run: |
-            echo "AZURE_KEYVAULT_URL=${{ secrets.AZURE_KEYVAULT_URL }}" >> .env
+          echo "AZURE_KEYVAULT_URL=${{ secrets.AZURE_KEYVAULT_URL }}" >> .env
 
 
