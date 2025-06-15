@@ -45,8 +45,8 @@ jobs:
 
       - name: Install dependencies for WeaslyPrint
         run: |
-          apt-get update
-          apt install -y \
+          sudo apt-get update
+          sudo apt install -y \
           libpango-1.0-0 \
           libharfbuzz0b \
           libpangoft2-1.0-0 \
