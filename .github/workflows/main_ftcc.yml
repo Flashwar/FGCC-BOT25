@@ -13,6 +13,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: Production
     permissions:
       id-token: write
       contents: read #This is required for actions/checkout
@@ -27,7 +28,6 @@ jobs:
         with:
             client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_326B7856498743A2B828B3F3BABABB35 }}
             tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_7B013E8A26E2442AA8D9B84B3B28C841 }}
-            subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_4EF2626E6B1B479C831DC264D1B2ADC6 }}
 
       - name: Set up Python version
         uses: actions/setup-python@v5
