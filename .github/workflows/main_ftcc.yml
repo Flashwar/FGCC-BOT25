@@ -43,6 +43,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install WeaslyPrint
+        run: |
+          sudo apt install weasyprint
+
+
       - name: Check available packages and install dependencies
         run: |
           sudo apt-get update
