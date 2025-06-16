@@ -13,8 +13,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: Production
     permissions:
+      id-token: write
       contents: read #This is required for actions/checkout
+    env:
+      AZURE_KEYVAULT_URL: ${{ secrets.AZURE_KEYVAULT_URL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +32,36 @@ jobs:
         run: |
           python -m venv venv
           source venv/bin/activate
-      
+
+      - name: Install WeaslyPrint
+        run: |
+          sudo apt install weasyprint
+
+
+      - name: Check available packages and install dependencies
+        run: |
+          sudo apt-get update
+          # Verfügbare Pakete anzeigen
+          apt-cache search libharfbuzz
+          apt-cache search libpango
+          
+          # Basis-Pakete installieren
+          sudo apt-get install -y \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libpangoft2-1.0-0 \
+            libffi-dev \
+            libjpeg-dev \
+            libcairo2-dev \
+            pkg-config
+            # Optional: Neuere Pakete
+            sudo apt-get install -y libharfbuzz0b libharfbuzz-subset0 || true
+            sudo apt-get install -y libopenjp2-7-dev || sudo apt-get install -y libopenjp2-7
+
+      - name: Run collectstatic
+        run: python manage.py collectstatic
+
+
       - name: Install dependencies
         run: pip install -r requirements.txt
         
@@ -78,4 +111,19 @@ jobs:
         with:
           app-name: 'fgtcc'
           slot-name: 'Production'
+
+      - name: Set Azure App Settings
+        run: |
+          az webapp config appsettings set \
+          --name "${{ vars.app_name2 }}" \
+          --resource-group "${{ secrets.RESSOURCE_GROUP_NAME }}" \
+          --settings AZURE_KEYVAULT_URL="${{ secrets.AZURE_KEYVAULT_URL }}"
+
+
+      - name: Set environment variable to .env file
+        run: |
+          echo "AZURE_KEYVAULT_URL=${{ secrets.AZURE_KEYVAULT_URL }}" >> .env
+
+
+
           
