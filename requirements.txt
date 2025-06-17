@@ -42,6 +42,7 @@ frozenlist==1.6.0
 grapheme==0.6.0
 graphviz==0.20.3
 greenlet==3.2.3
+gunicorn==23.0.0
 idna==3.10
 injector==0.22.0
 isodate==0.7.2
