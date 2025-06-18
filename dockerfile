@@ -26,6 +26,7 @@ RUN apt-get update \
         lsb-release \
         ca-certificates \
         jq \
+        gnupg \
         # WeasyPrint Dependencies
         libpango-1.0-0 \
         libharfbuzz0b \
@@ -37,7 +38,15 @@ RUN apt-get update \
         libatk1.0-0 \
         libcairo-gobject2 \
         libgtk-3-0 \
-        unixodbc
+        unixodbc \
+        unixodbc-dev \
+    # Add Microsoft repository and install ODBC driver
+    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -72,6 +81,9 @@ RUN apt-get update \
         libffi-dev \
         libjpeg-dev \
         libopenjp2-7-dev \
+        curl \
+        apt-transport-https \
+        gnupg \
         # WeasyPrint Runtime Dependencies
         libpango-1.0-0 \
         libharfbuzz0b \
@@ -84,6 +96,12 @@ RUN apt-get update \
         libcairo-gobject2 \
         libgtk-3-0 \
         unixodbc \
+        unixodbc-dev \
+    # Add Microsoft repository and install ODBC driver
+    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -98,7 +116,6 @@ COPY --from=builder /app /app
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 RUN chown -R appuser:appgroup /app
 USER appuser
-
 
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "FCCSemesterAufgabe.wsgi:application"]
 
