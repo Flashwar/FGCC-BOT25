@@ -1,10 +1,7 @@
 import django_filters
-from .models import Customer
-
-import django_filters
 from django_filters import DateFromToRangeFilter
 from django_filters.widgets import RangeWidget
-from .models import Customer
+from Bot.models import Customer
 
 
 class CustomerFilter(django_filters.FilterSet):

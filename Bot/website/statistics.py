@@ -4,8 +4,8 @@ from django.db.models import Count
 from django.shortcuts import render
 from plotly.offline import plot
 import plotly.graph_objs as go
-from .models import Customer
-from .services import CustomerService
+from Bot.models import Customer
+from Bot.services import CustomerService
 from injector import inject, singleton
 
 

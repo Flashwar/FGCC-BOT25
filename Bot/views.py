@@ -11,10 +11,10 @@ from django.shortcuts import render
 from weasyprint import HTML
 import plotly.io as pio
 from .services import CustomerService
-from .statistics import Statistics
+from Bot.website.statistics import Statistics
 from injector import inject
-from Bot.filters import CustomerFilter
-from Bot.tables import CustomerTable
+from Bot.website.filters import CustomerFilter
+from Bot.website.tables import CustomerTable
 
 class SuperuserLoginView(LoginView):
     def form_valid(self, form):

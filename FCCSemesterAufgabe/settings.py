@@ -12,7 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-from Bot.azure_keyvault import get_secret_from_keyvault
+from Bot.azure.azure_keyvault import get_secret_from_keyvault
 
 load_dotenv()
 isDocker = True if bool(os.getenv("DOCKER")) == True else False
@@ -42,7 +42,17 @@ else:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    f'{os.getenv("WEBSITE_URL","")}',
+    'localhost',
+    '127.0.0.1',
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    f'{os.getenv("WEBSITE_URL","https://localhost:8000")}',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+]
 
 AZURE_BOT_APP_ID = os.getenv('AZURE_BOT_APP_ID')
 AZURE_BOT_APP_SECRET = os.getenv('AZURE_BOT_APP_SECRET')
