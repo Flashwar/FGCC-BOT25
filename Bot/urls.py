@@ -15,6 +15,6 @@ urlpatterns = [
 #     path('api/audio/output/', call_callback, name='audio_output'),
 #     path('api/media/stream/', media_stream, name='media_stream'),
 
-    path('api/messages/', messages, name='bot_messages'),
+    path('api/messages', messages, name='bot_messages'),
 ]
 
