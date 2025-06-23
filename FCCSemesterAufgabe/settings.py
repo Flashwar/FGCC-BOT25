@@ -12,15 +12,17 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-from Bot.azure.azure_keyvault import get_secret_from_keyvault
+
+from Bot import azure_service
+from Bot.azure_service.keyvault import AzureKeyVaultService
 
 load_dotenv()
 isDocker = True if bool(os.getenv("DOCKER")) == True else False
 
 if  isDocker:
-    AZURE_KEYVAULT_URL = ""
+    AZURE_KEYVAULT = ""
 else:
-    AZURE_KEYVAULT_URL = os.environ.get("AZURE_KEYVAULT_URL")
+    AZURE_KEYVAULT = AzureKeyVaultService(os.environ.get("AZURE_KEYVAULT_URL"))
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -35,7 +37,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if isDocker:
     SECRET_KEY = os.getenv("SECRET_KEY")
 else:
-    SECRET_KEY = get_secret_from_keyvault("SECRET-KEY", AZURE_KEYVAULT_URL)
+    SECRET_KEY = AZURE_KEYVAULT.get_secret_from_keyvault("SECRET-KEY")
 
 
 
@@ -53,9 +55,6 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
 ]
-
-AZURE_BOT_APP_ID = os.getenv('AZURE_BOT_APP_ID')
-AZURE_BOT_APP_SECRET = os.getenv('AZURE_BOT_APP_SECRET')
 
 # Application definition
 
@@ -79,6 +78,12 @@ INSTALLED_APPS = [
     "django_extensions",
 
 ]
+
+CHANNEL_LAYERS = {
+     'default': {
+         'BACKEND': 'channels.layers.InMemoryChannelLayer'
+     }
+}
 
 INJECTOR_MODULES = [
     'Bot.injector.AppModule',
@@ -120,7 +125,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'FCCSemesterAufgabe.wsgi.application'
-
+#ASGI_APPLICATION = 'FCCSemesterAufgabe.asgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
@@ -132,11 +137,11 @@ if isDocker:
     Host = os.getenv('DB_HOST')
     Port = os.getenv('DB_PORT')
 else:
-    Name = get_secret_from_keyvault("DB-NAME", AZURE_KEYVAULT_URL)
-    User = get_secret_from_keyvault('DB-USER', AZURE_KEYVAULT_URL)
-    Passwort = get_secret_from_keyvault('DB-PASSWORT', AZURE_KEYVAULT_URL)
-    Host = get_secret_from_keyvault('DB-HOST', AZURE_KEYVAULT_URL)
-    Port = get_secret_from_keyvault('DB-PORT', AZURE_KEYVAULT_URL)
+    Name = AZURE_KEYVAULT.get_secret_from_keyvault("DB-NAME")
+    User = AZURE_KEYVAULT.get_secret_from_keyvault('DB-USER')
+    Passwort = AZURE_KEYVAULT.get_secret_from_keyvault('DB-PASSWORT')
+    Host = AZURE_KEYVAULT.get_secret_from_keyvault('DB-HOST')
+    Port = AZURE_KEYVAULT.get_secret_from_keyvault('DB-PORT')
 
 
 DATABASES = {
