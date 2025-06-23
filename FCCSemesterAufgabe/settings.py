@@ -124,8 +124,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'FCCSemesterAufgabe.wsgi.application'
-#ASGI_APPLICATION = 'FCCSemesterAufgabe.asgi.application'
+#WSGI_APPLICATION = 'FCCSemesterAufgabe.wsgi.application'
+ASGI_APPLICATION = 'FCCSemesterAufgabe.asgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
