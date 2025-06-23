@@ -522,7 +522,7 @@ from django.urls import path
 from django.http import JsonResponse
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
 from botbuilder.schema import Activity
-from tel_bot import VoiceOnlyBot
+from .tel_bot import VoiceOnlyBot
 import json
 
 adapter_settings = BotFrameworkAdapterSettings("", "")  # Kein AppID/AppPassword nötig
