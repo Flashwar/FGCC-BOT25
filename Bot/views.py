@@ -524,8 +524,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
 from .tel_bot import VoiceOnlyBot
+from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD
 
-adapter_settings = BotFrameworkAdapterSettings("", "")
+adapter_settings = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 bot = VoiceOnlyBot()
 
