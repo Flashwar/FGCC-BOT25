@@ -523,15 +523,11 @@ import logging
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
-from botbuilder.schema import Activity
 from .tel_bot import VoiceOnlyBot
-import json
 
-adapter_settings = BotFrameworkAdapterSettings("", "")  # Kein AppID/AppPassword nötig
+adapter_settings = BotFrameworkAdapterSettings("", "")
 adapter = BotFrameworkAdapter(adapter_settings)
 bot = VoiceOnlyBot()
-
-logger = logging.getLogger(__name__)
 
 @csrf_exempt
 async def messages(request):
@@ -541,16 +537,20 @@ async def messages(request):
     body_unicode = request.body.decode("utf-8")
     auth_header = request.headers.get("Authorization", "")
 
-    # 🔸 Bot-Ausführung in den Hintergrund legen (non-blocking)
+    # 🟢 Print für Debugging
+    print("\n📥 Neue Nachricht empfangen!")
+    print("🔸 Headers:", dict(request.headers))
+    print("🔸 Body:", body_unicode[:500])
+
     async def run_bot():
         try:
             await adapter.process_activity(body_unicode, auth_header, bot.on_turn)
         except Exception as e:
-            logger.error(f"Fehler beim Verarbeiten der Nachricht: {e}")
+            print("❌ Fehler beim Verarbeiten der Nachricht:", e)
 
     asyncio.create_task(run_bot())
 
-    # 🔸 Sofort HTTP 200 zurückgeben!
     return JsonResponse({"status": "received"})
+
 
 
