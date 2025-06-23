@@ -3,6 +3,7 @@ import io
 from allauth.account.views import LoginView
 from django.contrib import messages
 from django.contrib.auth.decorators import user_passes_test
+from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django_tables2 import RequestConfig
 from django_tables2.export import TableExport
@@ -158,91 +159,413 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
             return HttpResponse("Ungültiger Chart-Typ", status=400)
 
 
-import sys
+# import sys
+# import json
+# from http import HTTPStatus
+#
+# from django.views.decorators.csrf import csrf_exempt
+# from django.http import HttpResponse
+#
+# # Bot Framework Core Imports
+# from botbuilder.core import (
+#     BotFrameworkAdapter,
+#     BotFrameworkAdapterSettings,
+#     TurnContext,
+#     ConversationState,
+#     UserState,
+#     MemoryStorage  # WICHTIG: Ersetze dies in Produktion!
+# )
+# from botbuilder.schema import Activity, ActivityTypes
+#
+# # Importiere deinen Bot (angenommen, er liegt in 'bot_app/message_bot.py')
+# from .message_bot import RegistrationTextBot
+#
+# # Bot Framework Adapter Einstellungen
+# # In Produktion sollten APP_ID und APP_PASSWORD aus Umgebungsvariablen geladen werden.
+# # Für lokale Tests kannst du sie leer lassen oder Placeholder verwenden.
+# APP_ID = ""  # Ersetze dies mit deiner Microsoft App ID
+# APP_PASSWORD = ""  # Ersetze dies mit deinem Microsoft App Password
+#
+# # Erstelle den Bot Framework Adapter
+# SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
+# ADAPTER = BotFrameworkAdapter(SETTINGS)
+#
+# # Speicher für den Zustand.
+# # ACHTUNG: MemoryStorage ist NICHT für die Produktion geeignet,
+# # da Daten bei jedem Neustart des Servers verloren gehen!
+# # Für die Produktion solltest du AzureBlobStorage, CosmosDbStorage etc. verwenden.
+# MEMORY = MemoryStorage()
+# CONVERSATION_STATE = ConversationState(MEMORY)
+# USER_STATE = UserState(MEMORY)
+#
+# # Erstelle eine Instanz deines Bots
+# # Übergib die Zustands-Manager an den Bot
+# BOT = RegistrationTextBot(CONVERSATION_STATE, USER_STATE)
+#
+#
+# # Fehlermanagement für den Adapter
+# async def on_error(context: TurnContext, error: Exception):
+#     # Dies wird aufgerufen, wenn ein Fehler während der Bot-Verarbeitung auftritt.
+#     print(f"\n [on_error] Unbehandelter Fehler: {error}", file=sys.stderr)
+#     await context.send_activity("Entschuldigung, es ist ein Fehler aufgetreten und der Bot muss neu starten.")
+#
+#     # Optional: Den Zustand löschen, um den Bot zurückzusetzen, wenn ein Fehler auftritt
+#     await CONVERSATION_STATE.delete(context)
+#     await USER_STATE.delete(context)
+#
+#
+# # Registriere den Fehlerhandler beim Adapter
+# ADAPTER.on_turn_error = on_error
+#
+#
+# @csrf_exempt
+# async def messages(request):
+#     """
+#     Diese Django-View empfängt eingehende HTTP-POST-Anfragen vom Bot Framework Connector.
+#     """
+#     if request.method != 'POST':
+#         return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+#
+#     # Überprüfe den Content-Type des Requests
+#     if "application/json" not in request.headers.get("Content-Type", ""):
+#         return HttpResponse(status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+#
+#     # Lese den Request-Body und deserialisiere ihn in ein Activity-Objekt
+#     body = request.body.decode('utf-8')
+#     activity = Activity().deserialize(json.loads(body))
+#
+#     # Hole den Authorization-Header (wichtig für die Authentifizierung bei Azure Bot Service)
+#     auth_header = request.headers.get("Authorization", "")
+#
+#     try:
+#         # Der Adapter verarbeitet die eingehende Aktivität und ruft die Bot-Logik auf.
+#         # Die Methode BOT.on_turn wird pro eingehender Aktivität aufgerufen.
+#         await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
+#         return HttpResponse(status=HTTPStatus.OK)
+#
+#     except Exception as e:
+#         # Fange jegliche Fehler ab, die vor oder während der Adapter-Verarbeitung auftreten könnten.
+#         print(f"Fehler bei der Verarbeitung der Bot-Aktivität: {e}", file=sys.stderr)
+#         return HttpResponse(status=HTTPStatus.INTERNAL_SERVER_ERROR, text=str(e))
+#
+# import sys
+# import json
+# from http import HTTPStatus
+#
+# from django.views.decorators.csrf import csrf_exempt
+# from django.http import HttpResponse, JsonResponse
+# from django.conf import settings
+#
+# # Bot Framework Core Imports
+# from botbuilder.core import (
+#     BotFrameworkAdapter,
+#     BotFrameworkAdapterSettings,
+#     TurnContext,
+#     ConversationState,
+#     UserState,
+#     MemoryStorage
+# )
+# from botbuilder.schema import Activity
+#
+# # Importiere den Unified Bot
+# from call_bot import UnifiedTeamsBot
+#
+# # Bot Framework Adapter Einstellungen
+# APP_ID = getattr(settings, 'MICROSOFT_APP_ID', "")
+# APP_PASSWORD = getattr(settings, 'MICROSOFT_APP_PASSWORD', "")
+#
+# print(f"🤖 Bot Konfiguration - App ID: {APP_ID[:8] if APP_ID else 'Nicht gesetzt'}...")
+#
+# # Erstelle den Bot Framework Adapter
+# SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
+# ADAPTER = BotFrameworkAdapter(SETTINGS)
+#
+# # Speicher für den Zustand
+# # WARNUNG: MemoryStorage ist NICHT für Produktion geeignet!
+# # Verwende für Produktion AzureBlobStorage oder CosmosDbStorage
+# MEMORY = MemoryStorage()
+# CONVERSATION_STATE = ConversationState(MEMORY)
+# USER_STATE = UserState(MEMORY)
+#
+# # Erstelle eine Instanz des Unified Bots
+# BOT = UnifiedTeamsBot(CONVERSATION_STATE, USER_STATE)
+#
+# print("✅ Unified Teams Bot erfolgreich initialisiert")
+#
+#
+# # Fehlermanagement für den Adapter
+# async def on_error(context: TurnContext, error: Exception):
+#     """Behandelt Fehler im Bot Framework"""
+#     print(f"\n❌ [Bot Error] {error}", file=sys.stderr)
+#
+#     try:
+#         # Bestimme ob es ein Call oder Chat ist
+#         is_call = BOT._is_call_context(context)
+#
+#         if is_call:
+#             # Für Anrufe: Sprachausgabe
+#             await BOT._speak_to_caller(context, "Entschuldigung, es ist ein technischer Fehler aufgetreten.")
+#         else:
+#             # Für Chat: Text-Nachricht
+#             await context.send_activity("Entschuldigung, es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.")
+#
+#     except Exception as send_error:
+#         print(f"❌ Fehler beim Senden der Fehlernachricht: {send_error}", file=sys.stderr)
+#
+#     # Zustand zurücksetzen bei kritischen Fehlern
+#     try:
+#         await CONVERSATION_STATE.delete(context)
+#         await USER_STATE.delete(context)
+#     except Exception as cleanup_error:
+#         print(f"❌ Fehler beim Zustand-Cleanup: {cleanup_error}", file=sys.stderr)
+#
+#
+# # Registriere den Fehlerhandler
+# ADAPTER.on_turn_error = on_error
+#
+#
+# @csrf_exempt
+# async def messages(request):
+#     """
+#     Haupt-Endpoint für Bot Framework Nachrichten
+#     Behandelt sowohl Text-Chat als auch Teams-Nachrichten
+#     """
+#     if request.method != 'POST':
+#         return HttpResponse("Nur POST erlaubt", status=HTTPStatus.METHOD_NOT_ALLOWED)
+#
+#     content_type = request.headers.get("Content-Type", "")
+#     if "application/json" not in content_type:
+#         return HttpResponse("Content-Type muss application/json sein", status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+#
+#     try:
+#         # Request Body deserialisieren
+#         body = request.body.decode('utf-8')
+#         activity = Activity().deserialize(json.loads(body))
+#         auth_header = request.headers.get("Authorization", "")
+#
+#         # Logge wichtige Informationen
+#         print(f"📨 Aktivität empfangen: {activity.type} von {activity.channel_id}")
+#         if hasattr(activity, 'text') and activity.text:
+#             print(f"📝 Text: {activity.text[:100]}...")
+#         if hasattr(activity, 'name') and activity.name:
+#             print(f"🔔 Event Name: {activity.name}")
+#
+#         # Verarbeite die Aktivität mit dem Unified Bot
+#         await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
+#
+#         return HttpResponse("OK", status=HTTPStatus.OK)
+#
+#     except json.JSONDecodeError as e:
+#         print(f"❌ JSON Decode Fehler: {e}", file=sys.stderr)
+#         return HttpResponse("Ungültiges JSON", status=HTTPStatus.BAD_REQUEST)
+#
+#     except Exception as e:
+#         print(f"❌ Fehler bei der Aktivitätsverarbeitung: {e}", file=sys.stderr)
+#         import traceback
+#         traceback.print_exc()
+#         return HttpResponse("Interner Server Fehler", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+#
+#
+# @csrf_exempt
+# async def calls(request):
+#     """
+#     Spezieller Endpoint für Microsoft Teams Call Events
+#     Behandelt Anruf-spezifische Aktivitäten wie Invite, Established, Terminated
+#     """
+#     if request.method != 'POST':
+#         return HttpResponse("Nur POST erlaubt", status=HTTPStatus.METHOD_NOT_ALLOWED)
+#
+#     content_type = request.headers.get("Content-Type", "")
+#     if "application/json" not in content_type:
+#         return HttpResponse("Content-Type muss application/json sein", status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+#
+#     try:
+#         # Request Body deserialisieren
+#         body = request.body.decode('utf-8')
+#         activity = Activity().deserialize(json.loads(body))
+#         auth_header = request.headers.get("Authorization", "")
+#
+#         # Logge Call-spezifische Informationen
+#         print(f"📞 Call-Aktivität empfangen: {activity.type}")
+#         if hasattr(activity, 'name'):
+#             print(f"📞 Call Event Name: {activity.name}")
+#         if hasattr(activity, 'value') and activity.value:
+#             print(f"📞 Call Value: {activity.value}")
+#
+#         # Verarbeite mit dem Unified Bot (erkennt automatisch Call-Kontext)
+#         await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
+#
+#         return HttpResponse("OK", status=HTTPStatus.OK)
+#
+#     except json.JSONDecodeError as e:
+#         print(f"❌ JSON Decode Fehler bei Call: {e}", file=sys.stderr)
+#         return HttpResponse("Ungültiges JSON", status=HTTPStatus.BAD_REQUEST)
+#
+#     except Exception as e:
+#         print(f"❌ Fehler bei Call-Verarbeitung: {e}", file=sys.stderr)
+#         import traceback
+#         traceback.print_exc()
+#         return HttpResponse("Interner Server Fehler", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+#
+#
+# @csrf_exempt
+# async def incoming_call(request):
+#     """
+#     Endpoint für eingehende Anrufe von Teams
+#     Behandelt das initiale Call Invite
+#     """
+#     if request.method != 'POST':
+#         return HttpResponse("Nur POST erlaubt", status=HTTPStatus.METHOD_NOT_ALLOWED)
+#
+#     try:
+#         body = request.body.decode('utf-8')
+#         call_data = json.loads(body)
+#
+#         print(f"📞 Eingehender Anruf: {call_data}")
+#
+#         # Automatische Annahme-Antwort
+#         response_data = {
+#             "action": "accept",
+#             "callbackUri": f"{getattr(settings, 'BOT_BASE_URL', '')}/bot/api/call_callback",
+#             "acceptedModalities": ["audio"],
+#             "mediaConfig": {
+#                 "removeFromDefaultAudioGroup": False
+#             }
+#         }
+#
+#         return JsonResponse(response_data)
+#
+#     except Exception as e:
+#         print(f"❌ Fehler bei eingehendem Anruf: {e}", file=sys.stderr)
+#         return JsonResponse({
+#             "error": "Fehler bei Anrufverarbeitung"
+#         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+#
+#
+# @csrf_exempt
+# async def call_callback(request):
+#     """
+#     Callback-Endpoint für Call Status Updates
+#     Teams ruft diesen Endpoint für Call-Status-Änderungen auf
+#     """
+#     if request.method != 'POST':
+#         return HttpResponse("Nur POST erlaubt", status=HTTPStatus.METHOD_NOT_ALLOWED)
+#
+#     try:
+#         body = request.body.decode('utf-8')
+#         callback_data = json.loads(body)
+#
+#         print(f"📞 Call Callback empfangen: {callback_data}")
+#
+#         # Hier könntest du zusätzliche Call-Status-Verarbeitung implementieren
+#         # Der Unified Bot behandelt bereits die meisten Call Events
+#
+#         return JsonResponse({"status": "callback_processed"})
+#
+#     except Exception as e:
+#         print(f"❌ Fehler bei Call-Callback: {e}", file=sys.stderr)
+#         return JsonResponse({
+#             "error": "Callback-Verarbeitung fehlgeschlagen"
+#         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+#
+#
+# @csrf_exempt
+# async def media_stream(request):
+#     """
+#     Endpoint für Real-time Media Streaming
+#     Empfängt Audio-Streams von Teams Calls
+#     """
+#     if request.method != 'POST':
+#         return HttpResponse("Nur POST erlaubt", status=HTTPStatus.METHOD_NOT_ALLOWED)
+#
+#     try:
+#         content_type = request.headers.get('Content-Type', '')
+#         conversation_id = request.headers.get('X-Conversation-Id', 'unknown')
+#
+#         if 'audio' in content_type.lower():
+#             # Audio-Stream verarbeiten
+#             audio_data = request.body
+#
+#             print(f"🎵 Audio-Stream empfangen: {len(audio_data)} bytes für Conversation {conversation_id}")
+#
+#             # Audio direkt an den Bot weiterleiten würde hier passieren
+#             # Für jetzt loggen wir nur
+#
+#             return JsonResponse({
+#                 "success": True,
+#                 "processed_bytes": len(audio_data),
+#                 "conversation_id": conversation_id
+#             })
+#
+#         elif 'application/json' in content_type:
+#             # JSON-basierte Media Events
+#             data = json.loads(request.body.decode('utf-8'))
+#             event_type = data.get('eventType', 'unknown')
+#
+#             print(f"🎵 Media Event: {event_type}")
+#
+#             return JsonResponse({
+#                 "status": "event_processed",
+#                 "eventType": event_type
+#             })
+#
+#         else:
+#             return JsonResponse({
+#                 "error": "Unsupported media type"
+#             }, status=HTTPStatus.BAD_REQUEST)
+#
+#     except Exception as e:
+#         print(f"❌ Fehler bei Media-Stream: {e}", file=sys.stderr)
+#         return JsonResponse({
+#             "error": "Media-Stream-Verarbeitung fehlgeschlagen"
+#         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+# your_django_app/views.py
 import json
-from http import HTTPStatus
-
+import asyncio # Wichtig für await
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.http import HttpResponse
+from django.conf import settings # Import settings
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
+from botbuilder.schema import Activity
+from .tel_bot import VoiceOnlyBot
 
-# Bot Framework Core Imports
-from botbuilder.core import (
-    BotFrameworkAdapter,
-    BotFrameworkAdapterSettings,
-    TurnContext,
-    ConversationState,
-    UserState,
-    MemoryStorage  # WICHTIG: Ersetze dies in Produktion!
-)
-from botbuilder.schema import Activity, ActivityTypes
+# Bot Framework Adapter und Bot-Instanz initialisieren
+# Diese sollten nur einmal initialisiert werden und global oder in einer Singleton-Klasse verfügbar sein
+adapter_settings = BotFrameworkAdapterSettings("", "")
+adapter = BotFrameworkAdapter(adapter_settings)
+bot = VoiceOnlyBot()
 
-# Importiere deinen Bot (angenommen, er liegt in 'bot_app/bot.py')
-from .bot import RegistrationBot
+# Fehlerbehandlung für den Adapter
+async def on_error(context, error):
+    print(f"Bot error caught: {error}")
+    # Sende eine Fehlermeldung zurück zum Benutzer
+    await context.send_activity(f"Entschuldigung, es ist ein Fehler aufgetreten: {error}")
 
-# Bot Framework Adapter Einstellungen
-# In Produktion sollten APP_ID und APP_PASSWORD aus Umgebungsvariablen geladen werden.
-# Für lokale Tests kannst du sie leer lassen oder Placeholder verwenden.
-APP_ID = ""  # Ersetze dies mit deiner Microsoft App ID
-APP_PASSWORD = ""  # Ersetze dies mit deinem Microsoft App Password
-
-# Erstelle den Bot Framework Adapter
-SETTINGS = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
-ADAPTER = BotFrameworkAdapter(SETTINGS)
-
-# Speicher für den Zustand.
-# ACHTUNG: MemoryStorage ist NICHT für die Produktion geeignet,
-# da Daten bei jedem Neustart des Servers verloren gehen!
-# Für die Produktion solltest du AzureBlobStorage, CosmosDbStorage etc. verwenden.
-MEMORY = MemoryStorage()
-CONVERSATION_STATE = ConversationState(MEMORY)
-USER_STATE = UserState(MEMORY)
-
-# Erstelle eine Instanz deines Bots
-# Übergib die Zustands-Manager an den Bot
-BOT = RegistrationBot(CONVERSATION_STATE, USER_STATE)
-
-
-# Fehlermanagement für den Adapter
-async def on_error(context: TurnContext, error: Exception):
-    # Dies wird aufgerufen, wenn ein Fehler während der Bot-Verarbeitung auftritt.
-    print(f"\n [on_error] Unbehandelter Fehler: {error}", file=sys.stderr)
-    await context.send_activity("Entschuldigung, es ist ein Fehler aufgetreten und der Bot muss neu starten.")
-
-    # Optional: Den Zustand löschen, um den Bot zurückzusetzen, wenn ein Fehler auftritt
-    await CONVERSATION_STATE.delete(context)
-    await USER_STATE.delete(context)
-
-
-# Registriere den Fehlerhandler beim Adapter
-ADAPTER.on_turn_error = on_error
-
+adapter.on_turn_error = on_error
 
 @csrf_exempt
 async def messages(request):
-    """
-    Diese Django-View empfängt eingehende HTTP-POST-Anfragen vom Bot Framework Connector.
-    """
-    if request.method != 'POST':
-        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+    if request.method == "POST":
+        try:
+            # Der Bot Framework Adapter erwartet den rohen Request Body
+            # Er deserialisiert die Activity intern
+            body = await request.body.decode('utf-8') # Django 3.0+ für async body access
+            auth_header = request.headers.get("Authorization", "")
 
-    # Überprüfe den Content-Type des Requests
-    if "application/json" not in request.headers.get("Content-Type", ""):
-        return HttpResponse(status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            # Der Adapter verarbeitet die eingehende Aktivität, ruft on_turn() deines Bots auf
+            # und kümmert sich um das Senden der Antwort an den Kanal (über Azure Bot Service)
+            await adapter.process_activity(body, auth_header, bot.on_turn)
 
-    # Lese den Request-Body und deserialisiere ihn in ein Activity-Objekt
-    body = request.body.decode('utf-8')
-    activity = Activity().deserialize(json.loads(body))
+            # Die HTTP-Antwort an Azure muss immer 200 OK sein,
+            # sobald die Verarbeitung gestartet wurde. Die tatsächliche Bot-Antwort
+            # geht über den Adapter und Azure an den Telegram-Benutzer.
+            return JsonResponse({"status": "ok"}, status=200)
 
-    # Hole den Authorization-Header (wichtig für die Authentifizierung bei Azure Bot Service)
-    auth_header = request.headers.get("Authorization", "")
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON in request body"}, status=400)
+        except Exception as e:
+            print(f"Error in Django view: {e}")
+            return JsonResponse({"error": str(e)}, status=500)
 
-    try:
-        # Der Adapter verarbeitet die eingehende Aktivität und ruft die Bot-Logik auf.
-        # Die Methode BOT.on_turn wird pro eingehender Aktivität aufgerufen.
-        await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
-        return HttpResponse(status=HTTPStatus.OK)
-
-    except Exception as e:
-        # Fange jegliche Fehler ab, die vor oder während der Adapter-Verarbeitung auftreten könnten.
-        print(f"Fehler bei der Verarbeitung der Bot-Aktivität: {e}", file=sys.stderr)
-        return HttpResponse(status=HTTPStatus.INTERNAL_SERVER_ERROR, text=str(e))
+    return JsonResponse({"error": "Method not allowed"}, status=405)

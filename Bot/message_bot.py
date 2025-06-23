@@ -37,7 +37,7 @@ class DialogState:
     CONFIRM_PREFIX = "confirm_"
 
 
-class RegistrationBot(ActivityHandler):
+class RegistrationTextBot(ActivityHandler):
     def __init__(self, conversation_state: ConversationState, user_state: UserState):
         self.conversation_state = conversation_state
         self.user_state = user_state
