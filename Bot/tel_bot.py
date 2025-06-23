@@ -2,14 +2,13 @@ from botbuilder.core import ActivityHandler, TurnContext
 
 class VoiceOnlyBot(ActivityHandler):
     async def on_message_activity(self, turn_context: TurnContext):
-        # Nur auf Sprachnachrichten reagieren – keine Antwort senden
         activity = turn_context.activity
 
         if activity.attachments:
-            for attachment in activity.attachments:
-                if attachment.content_type.startswith("audio"):
-                    # Optionale Weiterverarbeitung hier möglich
-                    return  # Keine Antwort, einfach still verarbeiten
-
-        # Optional ignorieren, auch keine Antwort senden
-        return
+            content_type = activity.attachments[0].content_type
+            if content_type.startswith("audio/") or "voice" in content_type:
+                await turn_context.send_activity("Audio erhalten. Danke!")
+            else:
+                pass  # Keine Antwort auf Text o.Ä.
+        else:
+            pass  # Keine Anhänge → ignorieren

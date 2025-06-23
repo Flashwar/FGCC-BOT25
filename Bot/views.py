@@ -518,7 +518,9 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
 #             "error": "Media-Stream-Verarbeitung fehlgeschlagen"
 #         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
-from django.urls import path
+import asyncio
+import logging
+from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
 from botbuilder.schema import Activity
@@ -529,30 +531,26 @@ adapter_settings = BotFrameworkAdapterSettings("", "")  # Kein AppID/AppPassword
 adapter = BotFrameworkAdapter(adapter_settings)
 bot = VoiceOnlyBot()
 
-# Fehlerbehandlung (optional)
-async def on_error(context, error):
-    print(f"Bot error: {error}")
-adapter.on_turn_error = on_error
+logger = logging.getLogger(__name__)
 
+@csrf_exempt
 async def messages(request):
-    if request.method == "POST":
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    body_unicode = request.body.decode("utf-8")
+    auth_header = request.headers.get("Authorization", "")
+
+    # 🔸 Bot-Ausführung in den Hintergrund legen (non-blocking)
+    async def run_bot():
         try:
-            body = json.loads(request.body)
-            activity = Activity().deserialize(body)
-            auth_header = request.headers.get("Authorization", "")
-
-            await adapter.process_activity(activity, auth_header, bot.on_turn)
-
-            # Prüfen ob Audio-Anhang vorlag
-            if activity.attachments:
-                for att in activity.attachments:
-                    if att.content_type.startswith("audio"):
-                        return JsonResponse({"status": "success"}, status=200)
-
-            return JsonResponse({"status": "ignored"}, status=200)
+            await adapter.process_activity(body_unicode, auth_header, bot.on_turn)
         except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
+            logger.error(f"Fehler beim Verarbeiten der Nachricht: {e}")
 
-    return JsonResponse({"error": "Method not allowed"}, status=405)
+    asyncio.create_task(run_bot())
+
+    # 🔸 Sofort HTTP 200 zurückgeben!
+    return JsonResponse({"status": "received"})
 
 
