@@ -45,8 +45,6 @@ def admin_dashboard(request, customer_service: CustomerService):
 
     return render(request, 'dashboard.html', {'table': table, 'filter': f})
 
-
-
 @superuser_required
 @inject
 def customer_stats(request, statistics: Statistics):
@@ -520,52 +518,41 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
 #             "error": "Media-Stream-Verarbeitung fehlgeschlagen"
 #         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
-# your_django_app/views.py
-import json
-import asyncio # Wichtig für await
+from django.urls import path
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings # Import settings
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
 from botbuilder.schema import Activity
-from .tel_bot import VoiceOnlyBot
+from tel_bot import VoiceOnlyBot
+import json
 
-# Bot Framework Adapter und Bot-Instanz initialisieren
-# Diese sollten nur einmal initialisiert werden und global oder in einer Singleton-Klasse verfügbar sein
-adapter_settings = BotFrameworkAdapterSettings("", "")
+adapter_settings = BotFrameworkAdapterSettings("", "")  # Kein AppID/AppPassword nötig
 adapter = BotFrameworkAdapter(adapter_settings)
 bot = VoiceOnlyBot()
 
-# Fehlerbehandlung für den Adapter
+# Fehlerbehandlung (optional)
 async def on_error(context, error):
-    print(f"Bot error caught: {error}")
-    # Sende eine Fehlermeldung zurück zum Benutzer
-    await context.send_activity(f"Entschuldigung, es ist ein Fehler aufgetreten: {error}")
-
+    print(f"Bot error: {error}")
 adapter.on_turn_error = on_error
 
-@csrf_exempt
 async def messages(request):
     if request.method == "POST":
         try:
-            # Der Bot Framework Adapter erwartet den rohen Request Body
-            # Er deserialisiert die Activity intern
-            body = await request.body.decode('utf-8') # Django 3.0+ für async body access
+            body = json.loads(request.body)
+            activity = Activity().deserialize(body)
             auth_header = request.headers.get("Authorization", "")
 
-            # Der Adapter verarbeitet die eingehende Aktivität, ruft on_turn() deines Bots auf
-            # und kümmert sich um das Senden der Antwort an den Kanal (über Azure Bot Service)
-            await adapter.process_activity(body, auth_header, bot.on_turn)
+            await adapter.process_activity(activity, auth_header, bot.on_turn)
 
-            # Die HTTP-Antwort an Azure muss immer 200 OK sein,
-            # sobald die Verarbeitung gestartet wurde. Die tatsächliche Bot-Antwort
-            # geht über den Adapter und Azure an den Telegram-Benutzer.
-            return JsonResponse({"status": "ok"}, status=200)
+            # Prüfen ob Audio-Anhang vorlag
+            if activity.attachments:
+                for att in activity.attachments:
+                    if att.content_type.startswith("audio"):
+                        return JsonResponse({"status": "success"}, status=200)
 
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "Invalid JSON in request body"}, status=400)
+            return JsonResponse({"status": "ignored"}, status=200)
         except Exception as e:
-            print(f"Error in Django view: {e}")
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Method not allowed"}, status=405)
+
+
