@@ -51,7 +51,7 @@ ALLOWED_HOSTS = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    f'{os.getenv("WEBSITE_URL","https://localhost:8000")}',
+    f'https://{os.getenv("WEBSITE_URL","localhost:8000")}',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
 ]
