@@ -9,6 +9,7 @@ from Bot.azure_service.keyvault import AzureKeyVaultService
 from Bot.azure_service.luis_service import AzureCLUService
 from Bot.azure_service.speech_service import AzureSpeechService
 from .message_bot import RegistrationTextBot, DialogState
+from FCCSemesterAufgabe.settings import AZURE_KEYVAULT, isDocker
 
 print("=== AUDIO REGISTRATION BOT WIRD GELADEN ===")
 
@@ -28,9 +29,9 @@ class AudioRegistrationBot(ActivityHandler):
         # Azure Services initialisieren
         try:
             # KeyVault Service sollte von Settings kommen
-            from django.conf import settings
-            self.keyvault = settings.AZURE_KEYVAULT
-            if not settings.isDocker:
+
+            self.keyvault = AZURE_KEYVAULT
+            if not isDocker:
                 self.clu_service= None
                 self.speech_service = None
             else:
