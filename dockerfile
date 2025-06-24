@@ -71,6 +71,8 @@ RUN python manage.py collectstatic --noinput
 # === Final Stage ===
 FROM python:3.12-slim-bookworm
 
+ENV FONTCONFIG_PATH=/tmp/fontconfig
+RUN mkdir -p /tmp/fontconfig && chmod -R 777 /tmp/fontconfig
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
