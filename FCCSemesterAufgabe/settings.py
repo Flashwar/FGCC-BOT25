@@ -133,7 +133,7 @@ if isDocker:
     Passwort = os.getenv('DB_PASSWORT')
     Host = os.getenv('DB_HOST')
     Port = os.getenv('DB_PORT')
-    APP_ID = os.getenv('BOT-APP_ID')
+    APP_ID = os.getenv('BOT_ID')
     APP_PASSWORD = os.getenv('BOT_PASSWORD')
 else:
     Name = AZURE_KEYVAULT.get_secret_from_keyvault("DB-NAME")
@@ -141,7 +141,7 @@ else:
     Passwort = AZURE_KEYVAULT.get_secret_from_keyvault('DB-PASSWORT')
     Host = AZURE_KEYVAULT.get_secret_from_keyvault('DB-HOST')
     Port = AZURE_KEYVAULT.get_secret_from_keyvault('DB-PORT')
-    APP_ID = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-APP-ID')
+    APP_ID = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-ID')
     APP_PASSWORD = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-PASSWORT')
 
 
