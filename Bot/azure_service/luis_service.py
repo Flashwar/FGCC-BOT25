@@ -2,27 +2,29 @@ import aiohttp
 import json
 import os
 from typing import Dict, Any, List
-from keyvault import AzureKeyVaultService
 
 
 class AzureCLUService:
 
-    def __init__(self, keyvault: AzureKeyVaultService = None,
-                 prediction_key: str = None, project_name: str = None,
-                 deployment_name: str = None, prediction_endpoint: str = None):
+    def __init__(self, keyvault_service=None):
         """
         Initializes the Azure CLU (Conversational Language Understanding) Service
         with configuration values from Azure Key Vault.
         """
+        if not keyvault_service:
+            raise ValueError("KeyVault Service muss übergeben werden")
+
         # Retrieve all required secrets from Azure Key Vault
-        self.prediction_key = keyvault.get_secret("CLU-KEY")
-        self.project_name = keyvault.get_secret("CLU-PROJECT-NAME")
-        self.deployment_name = keyvault.get_secret("CLU-DEPLOYMENT-NAME")
-        self.prediction_endpoint = keyvault.get_secret("CLU-ENDPOINT")
+        self.prediction_key = keyvault_service.get_secret_from_keyvault("CLU-KEY")
+        self.project_name = keyvault_service.get_secret_from_keyvault("CLU-PROJECT-NAME")
+        self.deployment_name = keyvault_service.get_secret_from_keyvault("CLU-DEPLOYMENT-NAME")
+        self.prediction_endpoint = keyvault_service.get_secret_from_keyvault("CLU-ENDPOINT")
 
         # Ensure all required values are present
         if not all([self.prediction_key, self.project_name, self.deployment_name, self.prediction_endpoint]):
             raise ValueError("CLU secrets not fully found in KeyVault")
+
+        print(f"CLU Service initialisiert - Project: {self.project_name}")
 
     async def analyze_conversation(self, text: str, conversation_id: str = None,
                                    participant_id: str = "user") -> Dict[str, Any]:
@@ -60,6 +62,8 @@ class AzureCLUService:
                 }
             }
 
+            print(f"🧠 CLU Request für Text: '{text}'")
+
             # Perform async API request
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -69,20 +73,21 @@ class AzureCLUService:
                 ) as response:
                     if response.status == 200:
                         result = await response.json()
-                        return self.parse_clu_response(result, text)
+                        parsed_result = self.parse_clu_response(result, text)
+                        print(f"✅ CLU Analyse erfolgreich")
+                        return parsed_result
                     else:
                         error_text = await response.text()
-                        print(f"CLU API error {response.status}: {error_text}")
+                        print(f"❌ CLU API error {response.status}: {error_text}")
                         return self.get_default_response(text)
 
         except Exception as e:
-            print(f"CLU service exception: {e}")
+            print(f"❌ CLU service exception: {e}")
             return self.get_default_response(text)
 
     def parse_clu_response(self, clu_result: Dict, original_text: str) -> Dict[str, Any]:
         """
         Parses the raw CLU response and extracts intents and entities.
-
         Returns: Cleaned and structured CLU result.
         """
         try:
@@ -138,7 +143,12 @@ class AzureCLUService:
             }
 
         except Exception as e:
+            print(f"❌ CLU Parse Error: {e}")
             return self._create_error_response(original_text)
+
+    def get_default_response(self, text: str) -> Dict[str, Any]:
+        """Alias für _create_error_response für Kompatibilität"""
+        return self._create_error_response(text)
 
     def _create_error_response(self, text: str) -> Dict[str, Any]:
         """
@@ -161,3 +171,5 @@ class AzureCLUService:
             "error": True,
             "total_intents_found": 0
         }
+
+

@@ -520,31 +520,157 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
 #             "error": "Media-Stream-Verarbeitung fehlgeschlagen"
 #         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
+# from django.http import JsonResponse
+# from django.views.decorators.csrf import csrf_exempt
+# from django.views.decorators.http import require_http_methods
+# from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
+# from botbuilder.schema import Activity
+# from .tel_bot import AudioBot
+# import json
+# import asyncio
+# from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD
+#
+# adapter_settings = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
+# bot_settings = BotFrameworkAdapterSettings("", "")
+# #adapter = BotFrameworkAdapter(bot_settings)
+# #bot = AudioBot()
+#
+# print("=== BOT VIEWS WIRD GELADEN ===")
+#
+# # Bot Setup
+# try:
+#     adapter = BotFrameworkAdapter(adapter_settings)
+#     bot = AudioBot()
+#     print("✅ Bot erfolgreich initialisiert")
+#
+# except Exception as e:
+#     print(f"❌ Fehler bei Bot-Initialisierung: {str(e)}")
+#     raise
+#
+#
+# @csrf_exempt
+# @require_http_methods(["POST"])
+# def messages(request):
+#     print("\n" + "=" * 50)
+#     print("📨 NEUE REQUEST ERHALTEN")
+#     print("=" * 50)
+#
+#     try:
+#         # Body parsen
+#         try:
+#             body = json.loads(request.body.decode('utf-8'))
+#             print(f"✅ JSON erfolgreich geparst")
+#             print(f"Channel ID: {body.get('channelId', 'unbekannt')}")
+#             print(f"Service URL: {body.get('serviceUrl', 'keine')}")
+#
+#         except json.JSONDecodeError as e:
+#             print(f"❌ JSON Parse Error: {str(e)}")
+#             return JsonResponse({"error": "Invalid JSON"}, status=400)
+#
+#         # Activity erstellen
+#         try:
+#             activity = Activity().deserialize(body)
+#             print(f"✅ Activity erstellt: {activity.type}")
+#
+#             # WICHTIG: Service URL korrigieren für Emulator
+#             if activity.channel_id == 'emulator' and activity.service_url:
+#                 print(f"🔧 Original Service URL: {activity.service_url}")
+#                 # Die Service URL sollte richtig aus der Request kommen
+#
+#         except Exception as e:
+#             print(f"❌ Activity Error: {str(e)}")
+#             return JsonResponse({"error": "Invalid activity"}, status=400)
+#
+#         # Auth Header
+#         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+#
+#         # Bot verarbeiten
+#         async def aux_func(turn_context):
+#             try:
+#                 print("🤖 Bot startet...")
+#                 print(f"Service URL im Context: {turn_context.activity.service_url}")
+#                 await bot.on_turn(turn_context)
+#                 print("✅ Bot erfolgreich")
+#             except Exception as e:
+#                 print(f"❌ Bot Error: {str(e)}")
+#                 print(f"Error Type: {type(e).__name__}")
+#                 # Ignoriere Connection Errors bei Emulator für conversationUpdate
+#                 if "Connection refused" in str(e) and activity.type == "conversationUpdate":
+#                     print("⚠️ Connection Error bei conversationUpdate ignoriert (Emulator)")
+#                     return
+#                 raise
+#
+#         # Event Loop
+#         try:
+#             task = adapter.process_activity(activity, auth_header, aux_func)
+#
+#             try:
+#                 loop = asyncio.get_running_loop()
+#                 import concurrent.futures
+#                 with concurrent.futures.ThreadPoolExecutor() as executor:
+#                     future = executor.submit(asyncio.run, task)
+#                     future.result()
+#             except RuntimeError:
+#                 loop = asyncio.new_event_loop()
+#                 asyncio.set_event_loop(loop)
+#                 try:
+#                     loop.run_until_complete(task)
+#                 finally:
+#                     loop.close()
+#
+#             print("🎉 Request erfolgreich")
+#             return JsonResponse({"status": "ok"})
+#
+#         except Exception as e:
+#             print(f"❌ Processing Error: {str(e)}")
+#             # Bei Connection Errors trotzdem OK zurückgeben für Emulator
+#             if "Connection refused" in str(e):
+#                 print("⚠️ Connection Error - trotzdem OK für Emulator")
+#                 return JsonResponse({"status": "ok"})
+#             return JsonResponse({"error": str(e)}, status=500)
+#
+#     except Exception as e:
+#         print(f"💥 Unerwarteter Fehler: {str(e)}")
+#         return JsonResponse({"error": str(e)}, status=500)
+
+
+# bot/views.py
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, ConversationState, UserState, \
+    MemoryStorage
 from botbuilder.schema import Activity
-from .tel_bot import AudioBot
+from .tel_bot import AudioRegistrationBot
 import json
 import asyncio
-from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD
+from django.conf import settings
+import traceback
+from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD, AzureKeyVaultService
 
-adapter_settings = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
-bot_settings = BotFrameworkAdapterSettings("", "")
-#adapter = BotFrameworkAdapter(bot_settings)
-#bot = AudioBot()
+print("=== AUDIO BOT VIEWS WIRD GELADEN ===")
 
-print("=== BOT VIEWS WIRD GELADEN ===")
-
-# Bot Setup
+# Bot Setup mit State Management
 try:
+    print(f"App ID: '{APP_ID}'")
+    print(f"App Password gesetzt: {APP_PASSWORD}")
+
+    # Bot Framework Adapter
+    adapter_settings = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
     adapter = BotFrameworkAdapter(adapter_settings)
-    bot = AudioBot()
-    print("✅ Bot erfolgreich initialisiert")
+
+    # Memory Storage für State Management
+    memory_storage = MemoryStorage()
+    conversation_state = ConversationState(memory_storage)
+    user_state = UserState(memory_storage)
+
+    # Audio Registration Bot
+    bot = AudioRegistrationBot(conversation_state, user_state)
+
+    print("✅ Audio Bot erfolgreich initialisiert")
 
 except Exception as e:
-    print(f"❌ Fehler bei Bot-Initialisierung: {str(e)}")
+    print(f"❌ Fehler bei Audio Bot-Initialisierung: {str(e)}")
     raise
 
 
@@ -552,7 +678,7 @@ except Exception as e:
 @require_http_methods(["POST"])
 def messages(request):
     print("\n" + "=" * 50)
-    print("📨 NEUE REQUEST ERHALTEN")
+    print("📨 NEUE AUDIO BOT REQUEST")
     print("=" * 50)
 
     try:
@@ -561,7 +687,14 @@ def messages(request):
             body = json.loads(request.body.decode('utf-8'))
             print(f"✅ JSON erfolgreich geparst")
             print(f"Channel ID: {body.get('channelId', 'unbekannt')}")
-            print(f"Service URL: {body.get('serviceUrl', 'keine')}")
+            print(f"Activity Type: {body.get('type', 'unbekannt')}")
+
+            # Zeige Attachments falls vorhanden
+            attachments = body.get('attachments', [])
+            if attachments:
+                print(f"📎 Attachments gefunden: {len(attachments)}")
+                for i, att in enumerate(attachments):
+                    print(f"  {i + 1}. {att.get('contentType', 'unknown')} - {att.get('name', 'unnamed')}")
 
         except json.JSONDecodeError as e:
             print(f"❌ JSON Parse Error: {str(e)}")
@@ -572,11 +705,6 @@ def messages(request):
             activity = Activity().deserialize(body)
             print(f"✅ Activity erstellt: {activity.type}")
 
-            # WICHTIG: Service URL korrigieren für Emulator
-            if activity.channel_id == 'emulator' and activity.service_url:
-                print(f"🔧 Original Service URL: {activity.service_url}")
-                # Die Service URL sollte richtig aus der Request kommen
-
         except Exception as e:
             print(f"❌ Activity Error: {str(e)}")
             return JsonResponse({"error": "Invalid activity"}, status=400)
@@ -585,16 +713,17 @@ def messages(request):
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
 
         # Bot verarbeiten
-        async def aux_func(turn_context):
+        async def bot_logic(turn_context):
             try:
-                print("🤖 Bot startet...")
-                print(f"Service URL im Context: {turn_context.activity.service_url}")
+                print("🤖 Audio Bot startet...")
                 await bot.on_turn(turn_context)
-                print("✅ Bot erfolgreich")
+                print("✅ Audio Bot erfolgreich")
             except Exception as e:
                 print(f"❌ Bot Error: {str(e)}")
                 print(f"Error Type: {type(e).__name__}")
-                # Ignoriere Connection Errors bei Emulator für conversationUpdate
+                print(f"Traceback: {traceback.format_exc()}")
+
+                # Bei Connection Errors für conversationUpdate ignorieren (Emulator)
                 if "Connection refused" in str(e) and activity.type == "conversationUpdate":
                     print("⚠️ Connection Error bei conversationUpdate ignoriert (Emulator)")
                     return
@@ -602,7 +731,7 @@ def messages(request):
 
         # Event Loop
         try:
-            task = adapter.process_activity(activity, auth_header, aux_func)
+            task = adapter.process_activity(activity, auth_header, bot_logic)
 
             try:
                 loop = asyncio.get_running_loop()
@@ -618,12 +747,12 @@ def messages(request):
                 finally:
                     loop.close()
 
-            print("🎉 Request erfolgreich")
+            print("🎉 Audio Bot Request erfolgreich")
             return JsonResponse({"status": "ok"})
 
         except Exception as e:
             print(f"❌ Processing Error: {str(e)}")
-            # Bei Connection Errors trotzdem OK zurückgeben für Emulator
+            # Bei Connection Errors trotzdem OK für Emulator
             if "Connection refused" in str(e):
                 print("⚠️ Connection Error - trotzdem OK für Emulator")
                 return JsonResponse({"status": "ok"})
@@ -631,6 +760,5 @@ def messages(request):
 
     except Exception as e:
         print(f"💥 Unerwarteter Fehler: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         return JsonResponse({"error": str(e)}, status=500)
-
-

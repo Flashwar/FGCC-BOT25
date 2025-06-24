@@ -2,20 +2,24 @@ import azure.cognitiveservices.speech as speechsdk
 import tempfile
 import os
 from typing import Dict, Optional
-from keyvault import AzureKeyVaultService
 
 
 class AzureSpeechService:
-    def __init__(self, keyvault: AzureKeyVaultService = None):
+    def __init__(self, keyvault_service=None):
         """
         Initializes the Azure Speech Service
         """
+        if not keyvault_service:
+            raise ValueError("KeyVault Service muss übergeben werden")
+
         # Retrieve secrets from Azure Key Vault
-        self.speech_key = keyvault.get_secret("COG-KEY")
-        self.service_region = keyvault.get_secret("AZURE-SPEECH-REGION")
+        self.speech_key = keyvault_service.get_secret_from_keyvault("COG-KEY")
+        self.service_region = keyvault_service.get_secret_from_keyvault("AZURE-SPEECH-REGION")
 
         if not self.speech_key or not self.service_region:
             raise ValueError("AZURE-SPEECH-KEY or AZURE-SPEECH-REGION not found in KeyVault")
+
+        print(f"Speech Service initialisiert - Region: {self.service_region}")
 
         # Configuration for Text-to-Speech
         self.tts_config = speechsdk.SpeechConfig(
@@ -37,6 +41,8 @@ class AzureSpeechService:
         Returns: The generated audio in WAV format, or None if an error occurred
         """
         try:
+            print(f"TTS für Text: '{text[:50]}...'")
+
             self.tts_config.speech_synthesis_voice_name = voice
 
             # Create a temporary WAV file to store the audio output
@@ -60,6 +66,7 @@ class AzureSpeechService:
                     audio_bytes = f.read()
                 # delete the temporary file
                 os.unlink(temp_file.name)
+                print(f" TTS erfolgreich: {len(audio_bytes)} bytes")
                 return audio_bytes
             else:
                 os.unlink(temp_file.name)
@@ -67,7 +74,7 @@ class AzureSpeechService:
                 return None
 
         except Exception as e:
-            print(f"Text-to-Speech Exception: {e}")
+            print(f"❌ Text-to-Speech Exception: {e}")
             return None
 
     def speech_to_text_from_bytes(self, audio_bytes: bytes, language: str = "de-DE") -> Dict:
@@ -76,6 +83,8 @@ class AzureSpeechService:
         Returns: Dictionary containing a transcription result with metadata
         """
         try:
+            print(f"🎤 STT für Audio: {len(audio_bytes)} bytes")
+
             # Save audio bytes to a temporary WAV file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 temp_file.write(audio_bytes)
@@ -105,6 +114,7 @@ class AzureSpeechService:
 
                 # Process result
                 if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    print(f"STT erfolgreich: '{result.text}'")
                     return {
                         "success": True,
                         "text": result.text,
@@ -112,6 +122,7 @@ class AzureSpeechService:
                         "duration": getattr(result, 'duration', None)
                     }
                 elif result.reason == speechsdk.ResultReason.NoMatch:
+                    print("STT: Keine Sprache erkannt")
                     return {
                         "success": False,
                         "text": "",
@@ -119,6 +130,7 @@ class AzureSpeechService:
                         "reason": "NoMatch"
                     }
                 else:
+                    print(f"STT Error: {result.reason}")
                     return {
                         "success": False,
                         "text": "",
@@ -127,6 +139,7 @@ class AzureSpeechService:
                     }
 
         except Exception as e:
+            print(f"Speech-to-Text Exception: {e}")
             return {
                 "success": False,
                 "text": "",
