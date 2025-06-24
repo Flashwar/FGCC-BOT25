@@ -762,3 +762,158 @@ def messages(request):
         print(f"💥 Unerwarteter Fehler: {str(e)}")
         print(f"Traceback: {traceback.format_exc()}")
         return JsonResponse({"error": str(e)}, status=500)
+
+
+# bot/views.py
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, ConversationState, UserState, \
+    MemoryStorage
+from botbuilder.schema import Activity
+from .tel_bot import AudioRegistrationBot
+import json
+import asyncio
+from django.conf import settings
+import traceback
+
+print("=== AUDIO BOT VIEWS WIRD GELADEN ===")
+
+# Bot Setup mit State Management
+try:
+    print(f"App ID: '{APP_ID}'")
+    print(f"App Password gesetzt: {bool(APP_PASSWORD)}")
+
+    # Prüfe ob Emulator-Modus (keine Credentials)
+    is_emulator_mode = not getattr(settings, 'MICROSOFT_APP_ID', '') or not getattr(settings, 'MICROSOFT_APP_PASSWORD',
+                                                                                    '')
+    print(f"Emulator Modus erkannt: {is_emulator_mode}")
+
+    # Bot Framework Adapter - für Emulator ohne Auth
+    if is_emulator_mode:
+        print("🔧 Konfiguriere für Bot Framework Emulator (keine Auth)")
+        bot_settings = BotFrameworkAdapterSettings(
+            app_id="",
+            app_password=""
+        )
+    else:
+        print("🔧 Konfiguriere für Production (mit Auth)")
+        bot_settings = BotFrameworkAdapterSettings(
+            app_id=settings.MICROSOFT_APP_ID,
+            app_password=settings.MICROSOFT_APP_PASSWORD
+        )
+
+    adapter = BotFrameworkAdapter(bot_settings)
+
+    # Memory Storage für State Management
+    memory_storage = MemoryStorage()
+    conversation_state = ConversationState(memory_storage)
+    user_state = UserState(memory_storage)
+
+    # Audio Registration Bot
+    bot = AudioRegistrationBot(conversation_state, user_state)
+
+    print("✅ Audio Bot erfolgreich initialisiert")
+
+except Exception as e:
+    print(f"❌ Fehler bei Audio Bot-Initialisierung: {str(e)}")
+    raise
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def messages(request):
+    print("\n" + "=" * 50)
+    print("📨 NEUE AUDIO BOT REQUEST")
+    print("=" * 50)
+
+    try:
+        # Body parsen
+        try:
+            body = json.loads(request.body.decode('utf-8'))
+            print(f"✅ JSON erfolgreich geparst")
+            print(f"Channel ID: {body.get('channelId', 'unbekannt')}")
+            print(f"Activity Type: {body.get('type', 'unbekannt')}")
+
+            # Zeige Attachments falls vorhanden
+            attachments = body.get('attachments', [])
+            if attachments:
+                print(f"📎 Attachments gefunden: {len(attachments)}")
+                for i, att in enumerate(attachments):
+                    print(f"  {i + 1}. {att.get('contentType', 'unknown')} - {att.get('name', 'unnamed')}")
+
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON Parse Error: {str(e)}")
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        # Activity erstellen
+        try:
+            activity = Activity().deserialize(body)
+            print(f"✅ Activity erstellt: {activity.type}")
+
+        except Exception as e:
+            print(f"❌ Activity Error: {str(e)}")
+            return JsonResponse({"error": "Invalid activity"}, status=400)
+
+        # Auth Header
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+
+        # Bot verarbeiten
+        async def bot_logic(turn_context):
+            try:
+                print("🤖 Audio Bot startet...")
+                await bot.on_turn(turn_context)
+                print("✅ Audio Bot erfolgreich")
+            except Exception as e:
+                print(f"❌ Bot Error: {str(e)}")
+                print(f"Error Type: {type(e).__name__}")
+                print(f"Traceback: {traceback.format_exc()}")
+
+                # Bei Connection Errors für conversationUpdate ignorieren (Emulator)
+                if "Connection refused" in str(e) and activity.type == "conversationUpdate":
+                    print("⚠️ Connection Error bei conversationUpdate ignoriert (Emulator)")
+                    return
+                raise
+
+        # Event Loop
+        try:
+            task = adapter.process_activity(activity, auth_header, bot_logic)
+
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, task)
+                    future.result()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(task)
+                finally:
+                    loop.close()
+
+            print("🎉 Audio Bot Request erfolgreich")
+            return JsonResponse({"status": "ok"})
+
+        except Exception as e:
+            print(f"❌ Processing Error: {str(e)}")
+            # Bei Connection Errors trotzdem OK für Emulator
+            if "Connection refused" in str(e):
+                print("⚠️ Connection Error - trotzdem OK für Emulator")
+                return JsonResponse({"status": "ok"})
+            return JsonResponse({"error": str(e)}, status=500)
+
+    except Exception as e:
+        print(f"💥 Unerwarteter Fehler: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+# Test View für einfache Erreichbarkeit
+def test_view(request):
+    return JsonResponse({
+        "message": "Audio Bot endpoint erreichbar!",
+        "bot_type": "AudioRegistrationBot",
+        "supported_audio": ["audio/wav", "audio/mp3", "audio/ogg", "audio/webm"]
+    })
