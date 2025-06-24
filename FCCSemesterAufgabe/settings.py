@@ -48,6 +48,7 @@ ALLOWED_HOSTS = [
     f'{os.getenv("WEBSITE_URL","")}',
     'localhost',
     '127.0.0.1',
+    "0.0.0.0"
 ]
 
 CSRF_TRUSTED_ORIGINS = [

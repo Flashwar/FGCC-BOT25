@@ -1,5 +1,7 @@
 import base64
 import io
+import traceback
+
 from allauth.account.views import LoginView
 from django.contrib import messages
 from django.contrib.auth.decorators import user_passes_test
@@ -529,32 +531,106 @@ import asyncio
 from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD
 
 adapter_settings = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
-adapter = BotFrameworkAdapter(adapter_settings)
-bot = AudioBot()
+bot_settings = BotFrameworkAdapterSettings("", "")
+#adapter = BotFrameworkAdapter(bot_settings)
+#bot = AudioBot()
+
+print("=== BOT VIEWS WIRD GELADEN ===")
+
+# Bot Setup
+try:
+    adapter = BotFrameworkAdapter(adapter_settings)
+    bot = AudioBot()
+    print("✅ Bot erfolgreich initialisiert")
+
+except Exception as e:
+    print(f"❌ Fehler bei Bot-Initialisierung: {str(e)}")
+    raise
 
 
 @csrf_exempt
 @require_http_methods(["POST"])
 def messages(request):
-    if "application/json" in request.content_type:
-        body = json.loads(request.body.decode('utf-8'))
-    else:
-        return JsonResponse({"error": "Invalid content type"}, status=415)
-
-    activity = Activity().deserialize(body)
-    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
-
-    async def aux_func(turn_context):
-        await bot.on_turn(turn_context)
+    print("\n" + "=" * 50)
+    print("📨 NEUE REQUEST ERHALTEN")
+    print("=" * 50)
 
     try:
-        task = adapter.process_activity(activity, auth_header, aux_func)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(task)
-        return JsonResponse({"status": "ok"})
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        # Body parsen
+        try:
+            body = json.loads(request.body.decode('utf-8'))
+            print(f"✅ JSON erfolgreich geparst")
+            print(f"Channel ID: {body.get('channelId', 'unbekannt')}")
+            print(f"Service URL: {body.get('serviceUrl', 'keine')}")
 
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON Parse Error: {str(e)}")
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        # Activity erstellen
+        try:
+            activity = Activity().deserialize(body)
+            print(f"✅ Activity erstellt: {activity.type}")
+
+            # WICHTIG: Service URL korrigieren für Emulator
+            if activity.channel_id == 'emulator' and activity.service_url:
+                print(f"🔧 Original Service URL: {activity.service_url}")
+                # Die Service URL sollte richtig aus der Request kommen
+
+        except Exception as e:
+            print(f"❌ Activity Error: {str(e)}")
+            return JsonResponse({"error": "Invalid activity"}, status=400)
+
+        # Auth Header
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+
+        # Bot verarbeiten
+        async def aux_func(turn_context):
+            try:
+                print("🤖 Bot startet...")
+                print(f"Service URL im Context: {turn_context.activity.service_url}")
+                await bot.on_turn(turn_context)
+                print("✅ Bot erfolgreich")
+            except Exception as e:
+                print(f"❌ Bot Error: {str(e)}")
+                print(f"Error Type: {type(e).__name__}")
+                # Ignoriere Connection Errors bei Emulator für conversationUpdate
+                if "Connection refused" in str(e) and activity.type == "conversationUpdate":
+                    print("⚠️ Connection Error bei conversationUpdate ignoriert (Emulator)")
+                    return
+                raise
+
+        # Event Loop
+        try:
+            task = adapter.process_activity(activity, auth_header, aux_func)
+
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, task)
+                    future.result()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(task)
+                finally:
+                    loop.close()
+
+            print("🎉 Request erfolgreich")
+            return JsonResponse({"status": "ok"})
+
+        except Exception as e:
+            print(f"❌ Processing Error: {str(e)}")
+            # Bei Connection Errors trotzdem OK zurückgeben für Emulator
+            if "Connection refused" in str(e):
+                print("⚠️ Connection Error - trotzdem OK für Emulator")
+                return JsonResponse({"status": "ok"})
+            return JsonResponse({"error": str(e)}, status=500)
+
+    except Exception as e:
+        print(f"💥 Unerwarteter Fehler: {str(e)}")
+        return JsonResponse({"error": str(e)}, status=500)
 
 

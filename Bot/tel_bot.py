@@ -1,15 +1,12 @@
-# bot/audio_bot.py
+# bot/audio_bot.py - Vollversion mit Antworten
 from botbuilder.core import ActivityHandler, TurnContext, MessageFactory
 from botbuilder.schema import ChannelAccount, Attachment
 from typing import List
-import logging
 
-logger = logging.getLogger(__name__)
+print("=== AUDIO BOT WIRD GELADEN ===")
 
 
 class AudioBot(ActivityHandler):
-    """Audio Bot für Telegram und Web Chat"""
-
     def __init__(self):
         super().__init__()
         self.supported_audio_types = {
@@ -19,79 +16,75 @@ class AudioBot(ActivityHandler):
             'audio/webm',
             'audio/mp3'
         }
+        print("✅ AudioBot initialisiert")
 
     async def on_message_activity(self, turn_context: TurnContext):
-        # Prüfe auf Audio-Attachments
-        audio_attachments = [
-            att for att in (turn_context.activity.attachments or [])
-            if att.content_type in self.supported_audio_types
-        ]
+        print("\n" + "-" * 30)
+        print("📱 MESSAGE ACTIVITY")
+        print("-" * 30)
 
-        if not audio_attachments:
-            await turn_context.send_activity(
-                MessageFactory.text("🎵 Ich reagiere nur auf Audio-Nachrichten!")
-            )
-            return
-
-        # Verarbeite Audio
-        for attachment in audio_attachments:
-            await self._process_audio(turn_context, attachment)
-
-    async def _process_audio(self, turn_context: TurnContext, attachment: Attachment):
         try:
-            logger.info(f"Audio erhalten: {attachment.name}")
+            print(f"Channel: {turn_context.activity.channel_id}")
+            print(f"Text: {turn_context.activity.text}")
+            print(f"Service URL: {turn_context.activity.service_url}")
 
-            # Audio-Daten laden
-            audio_data = await self._get_audio_data(attachment)
+            attachments = turn_context.activity.attachments or []
+            print(f"Anzahl Attachments: {len(attachments)}")
 
-            if not audio_data:
+            # Zeige Attachment Details
+            for i, att in enumerate(attachments):
+                print(f"  Attachment {i + 1}:")
+                print(f"    Content-Type: {att.content_type}")
+                print(f"    Name: {att.name}")
+
+            # Audio-Attachments filtern
+            audio_attachments = [
+                att for att in attachments
+                if att.content_type in self.supported_audio_types
+            ]
+
+            print(f"🎵 Audio Attachments: {len(audio_attachments)}")
+
+            if not audio_attachments:
+                print("📝 Sende 'Nur Audio' Nachricht")
                 await turn_context.send_activity(
-                    MessageFactory.text("❌ Audio konnte nicht geladen werden.")
+                    MessageFactory.text("🎵 Ich reagiere nur auf Audio-Nachrichten!")
                 )
                 return
 
-            # Deine Audio-Verarbeitung hier
-            result = await self._analyze_audio(audio_data, attachment)
-
-            # Antwort senden
-            response = f"✅ Audio '{attachment.name or 'Sprachnachricht'}' verarbeitet!\n📊 {result}"
-            await turn_context.send_activity(MessageFactory.text(response))
+            # Verarbeite Audio
+            for attachment in audio_attachments:
+                await self._process_audio(turn_context, attachment)
 
         except Exception as e:
-            logger.error(f"Fehler bei Audio-Verarbeitung: {str(e)}")
-            await turn_context.send_activity(
-                MessageFactory.text("❌ Fehler beim Verarbeiten der Audio-Datei.")
-            )
+            print(f"❌ Fehler in on_message_activity: {str(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
 
-    async def _get_audio_data(self, attachment: Attachment) -> bytes:
-        """Lädt Audio-Daten"""
-        if attachment.content_url:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(attachment.content_url) as response:
-                    if response.status == 200:
-                        return await response.read()
-        return None
+    async def _process_audio(self, turn_context: TurnContext, attachment: Attachment):
+        try:
+            print(f"🎤 Verarbeite Audio: {attachment.name}")
+            print(f"Content-Type: {attachment.content_type}")
+            print(f"Content-URL: {attachment.content_url}")
 
-    async def _analyze_audio(self, audio_data: bytes, attachment: Attachment) -> str:
-        """Deine Audio-Analyse"""
-        # Hier deine spezifische Logik
-        file_size = len(audio_data)
+            response = f"✅ Audio erhalten: {attachment.name or 'Sprachnachricht'}"
+            print(f"📤 Sende Antwort: {response}")
 
-        # Beispiel: Hier würdest du machen:
-        # - Speech-to-Text
-        # - Audio-Features extrahieren
-        # - etc.
+            await turn_context.send_activity(MessageFactory.text(response))
+            print("✅ Antwort gesendet")
 
-        return f"Dateigröße: {file_size} bytes, Format: {attachment.content_type}"
+        except Exception as e:
+            print(f"❌ Fehler in _process_audio: {str(e)}")
 
     async def on_members_added_activity(
             self,
             members_added: List[ChannelAccount],
             turn_context: TurnContext
     ):
+        print(f"👋 Neue Mitglieder: {len(members_added)}")
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
+                print("📝 Sende Willkommensnachricht")
                 await turn_context.send_activity(
                     MessageFactory.text("👋 Hallo! Sende mir eine Audio-Nachricht!")
                 )
