@@ -29,9 +29,13 @@ class AudioRegistrationBot(ActivityHandler):
         try:
             # KeyVault Service sollte von Settings kommen
             from django.conf import settings
-            self.keyvault = settings.AZURE_KEYVAULT  # Aus Settings
-            self.clu_service = AzureCLUService(self.keyvault)
-            self.speech_service = AzureSpeechService(self.keyvault)
+            self.keyvault = settings.AZURE_KEYVAULT
+            if not settings.isDocker:
+                self.clu_service= None
+                self.speech_service = None
+            else:
+                self.clu_service = AzureCLUService(self.keyvault)
+                self.speech_service = AzureSpeechService(self.keyvault)
             print("✅ Azure Services erfolgreich initialisiert")
         except Exception as e:
             print(f"❌ Fehler bei Azure Services: {e}")
