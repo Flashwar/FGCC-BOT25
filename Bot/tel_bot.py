@@ -54,14 +54,14 @@ class SimplifiedAudioBot(ActivityHandler):
             from FCCSemesterAufgabe.settings import KEYVAULT_SERVICE, isDocker
             self.keyvault = KEYVAULT_SERVICE
 
-            if not isDocker:
-                self.clu_service = AzureCLUService(self.keyvault)
-                self.speech_service = AzureSpeechService(self.keyvault)
-                print("✅ Azure Services erfolgreich initialisiert")
-            else:
+            if isDocker:
                 print("⚠️ KeyVault Service nicht verfügbar - verwende Mock Services")
                 self.clu_service = None
                 self.speech_service = None
+            else:
+                self.clu_service = AzureCLUService(self.keyvault)
+                self.speech_service = AzureSpeechService(self.keyvault)
+                print("✅ Azure Services erfolgreich initialisiert")
 
         except Exception as e:
             print(f"⚠️ Azure Services nicht verfügbar: {e}")
