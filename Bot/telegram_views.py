@@ -248,7 +248,7 @@ def telegram_messages(request):
                 return JsonResponse({
                     "error": "Azure Authentication failed",
                     "message": "Prüfe Bot Service Credentials",
-                    "app_id": settings.APP_ID
+                    "app_id": APP_ID
                 }, status=401)
 
             elif "Invalid AppId" in error_msg:
