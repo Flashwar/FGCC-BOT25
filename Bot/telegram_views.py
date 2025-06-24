@@ -7,8 +7,9 @@ from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, Co
 from botbuilder.schema import Activity
 import json
 import asyncio
-from django.conf import settings
+from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD
 import traceback
+
 
 print("=== TELEGRAM BOT VIEWS LADEN ===")
 
@@ -93,8 +94,8 @@ try:
     print("📱 Initialisiere Telegram Bot...")
 
     # WICHTIG: Für Telegram MÜSSEN echte Credentials gesetzt werden
-    app_id = settings.APP_ID
-    app_password = settings.APP_PASSWORD
+    app_id = APP_ID
+    app_password = APP_PASSWORD
 
     print(f"📱 App ID: {app_id}")
     print(f"📱 App Password gesetzt: {bool(app_password)}")
@@ -247,7 +248,7 @@ def telegram_messages(request):
                 return JsonResponse({
                     "error": "Azure Authentication failed",
                     "message": "Prüfe Bot Service Credentials",
-                    "app_id": getattr(settings, 'MICROSOFT_APP_ID', 'NICHT_GESETZT')
+                    "app_id": settings.APP_ID
                 }, status=401)
 
             elif "Invalid AppId" in error_msg:
@@ -276,8 +277,8 @@ def telegram_messages(request):
 
 # Test Endpoint für Telegram
 def telegram_test(request):
-    app_id = settings.APP_ID
-    app_password = settings.APP_PASSWORD
+    app_id = APP_ID
+    app_password = APP_PASSWORD
     return JsonResponse({
         "message": "Telegram Bot endpoint erreichbar!",
         "bot_type": "TelegramAudioBot",

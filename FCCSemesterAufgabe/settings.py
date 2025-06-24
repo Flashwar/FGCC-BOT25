@@ -145,7 +145,7 @@ else:
     APP_PASSWORD = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-PASSWORT')
 
 
-
+print(f"APP-ID: {APP_ID}")
 
 
 
