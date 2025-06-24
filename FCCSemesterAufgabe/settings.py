@@ -48,13 +48,15 @@ ALLOWED_HOSTS = [
     f'{os.getenv("WEBSITE_URL","")}',
     'localhost',
     '127.0.0.1',
-    "0.0.0.0"
+    "0.0.0.0",
+    f"{os.getenv("BOT_URL","")}"
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     f'https://{os.getenv("WEBSITE_URL","localhost:8000")}',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
+    f'https://{os.getenv("BOT_URL","")}'
 ]
 
 # Application definition
@@ -79,12 +81,6 @@ INSTALLED_APPS = [
     "django_extensions",
 
 ]
-
-CHANNEL_LAYERS = {
-     'default': {
-         'BACKEND': 'channels.layers.InMemoryChannelLayer'
-     }
-}
 
 INJECTOR_MODULES = [
     'Bot.injector.AppModule',
