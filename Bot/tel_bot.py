@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, ConversationState, UserState
 from botbuilder.schema import ChannelAccount, Attachment, ActivityTypes
-from Bot.azure_service.luis_service import AzureCLUService
+from Bot.azure_service.luis_service import  AzureCLUService
 from Bot.azure_service.speech_service import AzureSpeechService
 from Bot.models import Customer, AddressCountry, AddressStreet, AddressCity, Address, CustomerContact
 
@@ -54,14 +54,14 @@ class SimplifiedAudioBot(ActivityHandler):
             from FCCSemesterAufgabe.settings import KEYVAULT_SERVICE, isDocker
             self.keyvault = KEYVAULT_SERVICE
 
-            if isDocker:
-                print("⚠️ KeyVault Service nicht verfügbar - verwende Mock Services")
-                self.clu_service = None
-                self.speech_service = None
-            else:
+            if not isDocker:
                 self.clu_service = AzureCLUService(self.keyvault)
                 self.speech_service = AzureSpeechService(self.keyvault)
                 print("✅ Azure Services erfolgreich initialisiert")
+            else:
+                print("⚠️ KeyVault Service nicht verfügbar")
+                self.clu_service = None
+                self.speech_service = None
 
         except Exception as e:
             print(f"⚠️ Azure Services nicht verfügbar: {e}")
@@ -126,14 +126,37 @@ class SimplifiedAudioBot(ActivityHandler):
                 return
 
             # 2. Speech-to-Text
-            stt_result = self.speech_service.speech_to_text_from_bytes(audio_bytes)
-            if not stt_result.get('success'):
-                await self._send_audio_response(turn_context,
-                                                "Entschuldigung, ich konnte Ihre Sprache nicht verstehen. Bitte sprechen Sie deutlicher.")
-                return
+            if self.speech_service:
+                stt_result = self.speech_service.speech_to_text_from_bytes(audio_bytes)
+                if not stt_result.get('success'):
+                    await self._send_audio_response(turn_context,
+                                                    "Entschuldigung, ich konnte Ihre Sprache nicht verstehen. Bitte sprechen Sie deutlicher.")
+                    return
 
-            recognized_text = stt_result.get('text', '').strip()
-            print(f"🗣️ Erkannter Text: '{recognized_text}'")
+                recognized_text = stt_result.get('text', '').strip()
+                print(f"🗣️ Erkannter Text: '{recognized_text}'")
+            else:
+                # Mock für Tests ohne Azure Speech Service
+                print("🧪 Mock STT: Azure Speech Service nicht verfügbar")
+                print(f"🧪 Audio Bytes erhalten: {len(audio_bytes)} bytes")
+
+                # Simuliere verschiedene Test-Eingaben basierend auf aktueller Dialog-State
+                dialog_state = await self.dialog_state_accessor.get(turn_context, lambda: SimplifiedAudioStates.START)
+
+                mock_responses = {
+                    SimplifiedAudioStates.START: "Hallo, ich möchte mich registrieren",
+                    SimplifiedAudioStates.ASK_NAME: "Max Mustermann",
+                    SimplifiedAudioStates.ASK_BIRTHDATE: "15.03.1990",
+                    SimplifiedAudioStates.ASK_EMAIL: "max.mustermann@example.com",
+                    SimplifiedAudioStates.ASK_PHONE: "0123456789",
+                    SimplifiedAudioStates.ASK_ADDRESS: "Musterstraße 123",
+                    SimplifiedAudioStates.ASK_POSTAL_CITY: "12345 Berlin",
+                    SimplifiedAudioStates.ASK_COUNTRY: "Deutschland",
+                    SimplifiedAudioStates.FINAL_VALIDATION: "ja"
+                }
+
+                recognized_text = mock_responses.get(dialog_state, "Test-Eingabe")
+                print(f"🧪 Mock erkannter Text für State '{dialog_state}': '{recognized_text}'")
 
             if not recognized_text:
                 await self._send_audio_response(turn_context,
@@ -409,27 +432,38 @@ class SimplifiedAudioBot(ActivityHandler):
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
         """Sendet Antwort als Audio"""
         try:
-            audio_bytes = self.speech_service.text_to_speech_bytes(text)
+            print(f"🔊 Generiere Audio für: '{text}'")
 
-            if audio_bytes:
-                import base64
-                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+            # Text-to-Speech (falls verfügbar)
+            if self.speech_service:
+                audio_bytes = self.speech_service.text_to_speech_bytes(text)
 
-                attachment = Attachment(
-                    content_type="audio/wav",
-                    content_url=f"data:audio/wav;base64,{audio_base64}",
-                    name="bot_response.wav"
-                )
+                if audio_bytes:
+                    import base64
+                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
 
-                reply = MessageFactory.attachment(attachment)
-                reply.text = f"🔊 {text}"
-                await turn_context.send_activity(reply)
-            else:
-                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+                    attachment = Attachment(
+                        content_type="audio/wav",
+                        content_url=f"data:audio/wav;base64,{audio_base64}",
+                        name="bot_response.wav"
+                    )
+
+                    reply = MessageFactory.attachment(attachment)
+                    reply.text = f"🔊 {text}"
+                    await turn_context.send_activity(reply)
+                    return
+
+            # Fallback: Text-Nachricht (für Docker/Mock-Modus)
+            print("🔊 Sende Text-Fallback (kein TTS verfügbar)")
+            await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
 
         except Exception as e:
             print(f"❌ Audio Response Error: {e}")
-            await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+            # Letzter Fallback: einfache Text-Nachricht
+            try:
+                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+            except Exception as e2:
+                print(f"❌ Auch Text-Fallback fehlgeschlagen: {e2}")
 
     async def _send_audio_only_message(self, turn_context: TurnContext):
         """Hinweis für Nur-Audio-Modus"""
