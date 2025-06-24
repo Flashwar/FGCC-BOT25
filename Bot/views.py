@@ -518,40 +518,43 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
 #             "error": "Media-Stream-Verarbeitung fehlgeschlagen"
 #         }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
-import asyncio
-import logging
-from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
-from .tel_bot import VoiceOnlyBot
+from botbuilder.schema import Activity
+from .tel_bot import AudioBot
+import json
+import asyncio
 from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD
 
 adapter_settings = BotFrameworkAdapterSettings(APP_ID, APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
-bot = VoiceOnlyBot()
+bot = AudioBot()
+
 
 @csrf_exempt
-async def messages(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "Method not allowed"}, status=405)
+@require_http_methods(["POST"])
+def messages(request):
+    if "application/json" in request.content_type:
+        body = json.loads(request.body.decode('utf-8'))
+    else:
+        return JsonResponse({"error": "Invalid content type"}, status=415)
 
-    body_unicode = request.body.decode("utf-8")
-    auth_header = request.headers.get("Authorization", "")
+    activity = Activity().deserialize(body)
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
 
-    # 🟢 Print für Debugging
-    print("\n📥 Neue Nachricht empfangen!")
-    print("🔸 Headers:", dict(request.headers))
-    print("🔸 Body:", body_unicode[:500])
+    async def aux_func(turn_context):
+        await bot.on_turn(turn_context)
 
-    async def run_bot():
-        try:
-            await adapter.process_activity(body_unicode, auth_header, bot.on_turn)
-        except Exception as e:
-            print("❌ Fehler beim Verarbeiten der Nachricht:", e)
-
-    asyncio.create_task(run_bot())
-
-    return JsonResponse({"status": "received"})
+    try:
+        task = adapter.process_activity(activity, auth_header, aux_func)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(task)
+        return JsonResponse({"status": "ok"})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 
