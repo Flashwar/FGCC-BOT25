@@ -31,7 +31,7 @@ class AudioRegistrationBot(ActivityHandler):
             # KeyVault Service sollte von Settings kommen
 
             self.keyvault = AZURE_KEYVAULT
-            if not isDocker:
+            if isDocker:
                 self.clu_service= None
                 self.speech_service = None
             else:
