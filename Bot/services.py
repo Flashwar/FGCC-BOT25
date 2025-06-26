@@ -1,44 +1,35 @@
 from injector import singleton
 from django.db.models import Count
+from django.db import transaction
+from asgiref.sync import sync_to_async
 from Bot.models import Customer, AddressCountry, AddressStreet, AddressCity, Address, CustomerContact
-
 
 @singleton
 class CustomerService:
-    """Service for all customer-related database operations"""
+    # Service for handling all customer-related database operations
 
     def get_all_customers_with_relations(self):
-        """
-        Retrieves all customers along with their related address and country information.
-        Uses select_related to optimize database queries.
-        """
+        # Retrieve all customers with their associated address, street, city, and country
+        # Uses select_related for performance optimization
         return Customer.objects.select_related(
             'address__street',
             'address__place__country'
         ).all()
 
     def get_total_count(self):
-        """
-        Returns the total number of customers in the database.
-        """
+        # Get total number of customer records in the database
         return Customer.objects.count()
 
     def get_title_distribution(self):
-        """
-        Returns a distribution count of customers by title.
-        """
+        # Return a list of customer titles with their corresponding count
         return list(Customer.objects.values('title').annotate(count=Count('title')))
 
     def get_gender_distribution(self):
-        """
-        Returns a distribution count of customers by gender.
-        """
+        # Return a list of customer genders with their corresponding count
         return list(Customer.objects.values('gender').annotate(count=Count('gender')))
 
     def get_country_distribution(self):
-        """
-        Returns the number of customers grouped by their country.
-        """
+        # Return a list showing how many customers are from each country
         return list(
             Customer.objects
             .values('address__place__country__country_name')
@@ -46,65 +37,71 @@ class CustomerService:
         )
 
     def get_customers_with_birth_dates(self):
-        """
-        Retrieves all customers who have a recorded birth date.
-        Only returns customer ID and birth date for performance optimization.
-        """
+        # Retrieve all customers with a birth_date
+        # Return only required fields: customer_id and birth_date
         return Customer.objects.exclude(birth_date__isnull=True).only('customer_id', 'birth_date')
 
-    def create_full_customer(self, customer_data: dict, contact_data: dict, address_data: dict):
-        """
-        Creates a full customer record including related country, city, street, address, and contact data.
+    async def email_exists_in_db(self, email: str) -> bool:
+        # Check whether the given email exists in the customer contact table
 
-        Args:
-            customer_data (dict): Dictionary containing customer personal data.
-            contact_data (dict): Dictionary containing contact details like email and telephone.
-            address_data (dict): Dictionary containing address details including country, city, and street.
+        def _check_email():
+            return CustomerContact.objects.filter(email=email).exists()
 
-        Returns:
-            Customer: The created Customer instance.
-        """
+        return await sync_to_async(_check_email, thread_sensitive=False)()
 
-        # Create or get country
-        country, _ = AddressCountry.objects.get_or_create(
-            country_name=address_data["country_name"]
-        )
+    async def store_data_db(self, user_profile: dict) -> bool:
+        # Save customer data into the database based on a user profile dictionary
+        def _store_data_sync():
+            # synchron helper function to execute database operations within a transaction
+            try:
+                with transaction.atomic():
+                    # Create or retrieve country
+                    country_obj, _ = AddressCountry.objects.get_or_create(
+                        country_name=user_profile['country_name']
+                    )
 
-        # Create or get city
-        city, _ = AddressCity.objects.get_or_create(
-            city=address_data["city"],
-            postal_code=address_data["postal_code"],
-            country=country
-        )
+                    # Create or retrieve street
+                    street_obj, _ = AddressStreet.objects.get_or_create(
+                        street_name=user_profile['street_name']
+                    )
 
-        # Create or get street
-        street, _ = AddressStreet.objects.get_or_create(
-            street_name=address_data["street_name"]
-        )
+                    # Create or retrieve city
+                    city_obj, _ = AddressCity.objects.get_or_create(
+                        city=user_profile['city'],
+                        postal_code=user_profile['postal_code'],
+                        country=country_obj
+                    )
 
-        # Create address
-        address = Address.objects.create(
-            street=street,
-            house_number=address_data["house_number"],
-            house_number_addition=address_data.get("house_number_addition", ""),
-            place=city
-        )
+                    # Create address
+                    address_obj = Address.objects.create(
+                        street=street_obj,
+                        house_number=user_profile['house_number'],
+                        house_number_addition=user_profile.get('house_number_addition', ''),
+                        place=city_obj
+                    )
 
-        # Create customer
-        customer = Customer.objects.create(
-            first_name=customer_data["first_name"],
-            second_name=customer_data["second_name"],
-            gender=customer_data["gender"],
-            birth_date=customer_data["birth_date"],
-            title=customer_data.get("title", ""),
-            address=address
-        )
+                    # Create customer
+                    customer = Customer.objects.create(
+                        gender=user_profile['gender'],
+                        first_name=user_profile['first_name'],
+                        second_name=user_profile['last_name'],
+                        birth_date=user_profile['birth_date'],
+                        title=user_profile.get('title', ''),
+                        address=address_obj
+                    )
 
-        # Create contact
-        CustomerContact.objects.create(
-            customer=customer,
-            email=contact_data["email"],
-            telephone=contact_data["telephone"]
-        )
+                    # Create customer contact
+                    CustomerContact.objects.create(
+                        customer=customer,
+                        email=user_profile['email'],
+                        telephone=user_profile['telephone']
+                    )
 
-        return customer
+                    return True
+
+            except Exception as e:
+                print(f"Error while saving customer data {e}")
+                return False
+
+        # Run the sync operation asynchronously
+        return await sync_to_async(_store_data_sync, thread_sensitive=False)()

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import (
+from Bot.models import (
     AddressCountry, AddressStreet, AddressCity, Address,
     Customer, CustomerContact
 )

@@ -57,6 +57,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
     f'https://{os.getenv("BOT_URL","")}'
+    'https://webchat.botframework.com',
+    'https://directline.botframework.com'
 ]
 
 # Application definition
@@ -135,6 +137,8 @@ if isDocker:
     Port = os.getenv('DB_PORT')
     APP_ID = os.getenv('BOT_ID')
     APP_PASSWORD = os.getenv('BOT_PASSWORD')
+    BOT_FRAMEWORK_BOT_ID = os.getenv('BOT_FRAMEWORK_BOT_ID')
+    BOT_FRAMEWORK_SECRET = os.getenv('BOT_FRAMEWORK_SECRET')
 else:
     Name = AZURE_KEYVAULT.get_secret_from_keyvault("DB-NAME")
     User = AZURE_KEYVAULT.get_secret_from_keyvault('DB-USER')
@@ -143,11 +147,8 @@ else:
     Port = AZURE_KEYVAULT.get_secret_from_keyvault('DB-PORT')
     APP_ID = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-ID')
     APP_PASSWORD = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-PASSWORT')
-
-
-print(f"APP-ID: {APP_ID}")
-
-
+    BOT_FRAMEWORK_BOT_ID = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-FRAMEWORK-BOT-ID')
+    BOT_FRAMEWORK_SECRET = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-FRAMEWORK-SECRET')
 
 DATABASES = {
     'default': {

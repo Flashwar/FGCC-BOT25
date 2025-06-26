@@ -1,14 +1,11 @@
 import azure.cognitiveservices.speech as speechsdk
 import tempfile
 import os
-from typing import Dict, Optional
 
 
+# Class for TTS and STT
 class AzureSpeechService:
     def __init__(self, keyvault_service=None):
-        """
-        Initializes the Azure Speech Service
-        """
         if not keyvault_service:
             raise ValueError("KeyVault Service muss übergeben werden")
 
@@ -17,7 +14,7 @@ class AzureSpeechService:
         self.service_region = keyvault_service.get_secret_from_keyvault("AZURE-SPEECH-REGION")
 
         if not self.speech_key or not self.service_region:
-            raise ValueError("AZURE-SPEECH-KEY or AZURE-SPEECH-REGION not found in KeyVault")
+            raise ValueError("Werte im Keyvault konnten nicht gefunden werden.")
 
         print(f"Speech Service initialisiert - Region: {self.service_region}")
 
@@ -35,11 +32,9 @@ class AzureSpeechService:
         )
         self.stt_config.speech_recognition_language = "de-DE"
 
-    def text_to_speech_bytes(self, text: str, voice: str = "de-DE-KatjaNeural") -> Optional[bytes]:
-        """
-        Converts text to audio bytes using Azure TTS (Text-to-Speech)
-        Returns: The generated audio in WAV format, or None if an error occurred
-        """
+    def text_to_speech_bytes(self, text: str, voice: str = "de-DE-KatjaNeural"):
+        # Converts text to audio bytes using Azure TTS (Text-to-Speech)
+
         try:
             print(f"TTS für Text: '{text[:50]}...'")
 
@@ -77,13 +72,10 @@ class AzureSpeechService:
             print(f"❌ Text-to-Speech Exception: {e}")
             return None
 
-    def speech_to_text_from_bytes(self, audio_bytes: bytes, language: str = "de-DE") -> Dict:
-        """
-        Converts audio bytes into text using Azure STT (Speech-to-Text)
-        Returns: Dictionary containing a transcription result with metadata
-        """
+    def speech_to_text_from_bytes(self, audio_bytes: bytes, language: str = "de-DE"):
+        # Converts audio bytes into text using Azure STT (Speech-to-Text)
         try:
-            print(f"🎤 STT für Audio: {len(audio_bytes)} bytes")
+            print(f"STT für Audio: {len(audio_bytes)} bytes")
 
             # Save audio bytes to a temporary WAV file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:

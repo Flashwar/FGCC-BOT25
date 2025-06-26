@@ -1,21 +1,19 @@
 import re
+
 from datetime import datetime
-from django.core.validators import validate_email
-from django.core.exceptions import ValidationError
-from phonenumber_field.phonenumber import PhoneNumber
-from phonenumbers import NumberParseException, parse, is_valid_number
-from asgiref.sync import sync_to_async
+from injector import inject
 
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, ConversationState, UserState
 from botbuilder.schema import ChannelAccount
 
-
-from Bot.models import Customer, AddressCountry, AddressStreet, AddressCity, Address, CustomerContact
+from .validators import DataValidator
+from .services import CustomerService
 
 
 class DialogState:
-    """Definiert die möglichen Zustände innerhalb des Dialogs."""
+    """Defines the possible states within the conversation flow"""
     GREETING = "greeting"
+    ASK_CONSENT = "ask_consent"
     ASK_GENDER = "ask_gender"
     ASK_TITLE = "ask_title"
     ASK_FIRST_NAME = "ask_first_name"
@@ -33,20 +31,26 @@ class DialogState:
     COMPLETED = "completed"
     ERROR = "error"
 
-    # Bestätigungs-Zustände (dynamisch erstellt für jedes Feld)
+    ## Confirmation states (dynamically created for each field, e.g., 'confirm_gender')
     CONFIRM_PREFIX = "confirm_"
 
 
 class RegistrationTextBot(ActivityHandler):
-    def __init__(self, conversation_state: ConversationState, user_state: UserState):
+    """Initializes the RegistrationTextBot"""
+    @inject
+    def __init__(self, conversation_state: ConversationState, user_state: UserState, customer_service: CustomerService):
+        self.customer_service = customer_service
         self.conversation_state = conversation_state
         self.user_state = user_state
 
+        # Accessors for storing and retrieving user profile and dialogue state data
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
         self.dialog_state_accessor = self.conversation_state.create_property("DialogState")
 
+        # Dictionary mapping dialogue states to their respective handler methods
         self.dialog_handlers = {
             DialogState.GREETING: self._handle_greeting,
+            DialogState.ASK_CONSENT: self._handle_consent_input,
             DialogState.ASK_GENDER: self._handle_gender_input,
             DialogState.ASK_TITLE: self._handle_title_input,
             DialogState.ASK_FIRST_NAME: self._handle_first_name_input,
@@ -61,8 +65,10 @@ class RegistrationTextBot(ActivityHandler):
             DialogState.ASK_CITY: self._handle_city_input,
             DialogState.ASK_COUNTRY: self._handle_country_input,
             DialogState.FINAL_CONFIRMATION: self._handle_final_confirmation,
+            "correction_selection": self._handle_correction_selection,
         }
-
+        # Defines the linear flow of the dialogue, including confirmation steps
+        # Each tuple: (confirmation_state, next_question_if_confirmed, re-ask_question_if_not_confirmed)
         self.dialog_flow = [
             ("confirm_gender", self._ask_for_title, self._ask_for_gender),
             ("confirm_title", self._ask_for_first_name, self._ask_for_title),
@@ -79,63 +85,407 @@ class RegistrationTextBot(ActivityHandler):
             ("confirm_country", self._show_final_summary, self._ask_for_country),
         ]
 
-    # --- Vom ActivityHandler überschriebene Methoden ---
-
     async def on_message_activity(self, turn_context: TurnContext):
-        """Wird aufgerufen, wenn eine Nachricht empfangen wird."""
+        # Called when a message activity is received from the user
+
+        # Retrieve user profile and current dialogue state. If not set, initialize to empty dict or GREETING.
         user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
         dialog_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
 
         user_input = turn_context.activity.text.strip()
+        user_input_lower = user_input.lower()
 
-        # Bestätigungslogik für alle Felder
-        if dialog_state.startswith(DialogState.CONFIRM_PREFIX):
+        # Special handling for the COMPLETED state, where the registration is finished
+        if dialog_state == DialogState.COMPLETED:
+            await self._handle_completed_state(turn_context, user_profile, user_input)
+        # Handle the state where the user is selecting a field to correct
+        elif dialog_state == "correction_selection":
+            await self._handle_correction_selection(turn_context, user_profile, user_input)
+        # Handle the state where the user is selecting a field to correct
+        elif dialog_state.startswith(DialogState.CONFIRM_PREFIX):
             await self._handle_confirmation(turn_context, user_profile, user_input, dialog_state)
         elif dialog_state in self.dialog_handlers:
-            # Rufe den spezifischen Handler auf
+            # Handle confirmation logic for any field
             await self.dialog_handlers[dialog_state](turn_context, user_profile, user_input)
         else:
-            # Fallback für unbekannte Zustände
-            await turn_context.send_activity(MessageFactory.text(
-                "Entschuldigung, ich bin verwirrt. Bitte starten Sie neu, indem Sie 'Hallo' sagen."))
-            await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
-            # Optional: Zustand zurücksetzen oder eine neue Begrüßung starten
-            # await self.user_profile_accessor.set(turn_context, {}) # Profil leeren
+            # Fallback for unknown or unhandled states
+            # should not be possible
+            await self._handle_unknown_state(turn_context, user_profile, user_input)
 
-        # Zustand nach jeder Runde speichern
+        # save the state after each iteration
         await self.conversation_state.save_changes(turn_context)
         await self.user_state.save_changes(turn_context)
 
-    async def on_members_added_activity(self, members_added: [ChannelAccount], turn_context: TurnContext):
-        """Wird aufgerufen, wenn Mitglieder zur Konversation hinzugefügt werden."""
-        for member in members_added:
-            if member.id != turn_context.activity.recipient.id:
-                await turn_context.send_activity("Hallo! Ich bin ein Bot, der Ihnen bei der Registrierung hilft.")
-                # Initialisiere den Dialog, wenn der Bot der Konversation hinzugefügt wird
+
+
+    async def _start_correction_process(self, turn_context: TurnContext, user_profile):
+        # Starts the correction process by displaying a list of fields the user can choose to modify
+
+        correction_options = (
+            "**Welche Daten möchten Sie korrigieren?**\n\n"
+            "**Wählen Sie eine Nummer oder den Namen:**\n"
+            "**1.** Geschlecht\n"
+            "**2.** Titel\n"
+            "**3.** Vorname\n"
+            "**4.** Nachname\n"
+            "**5.** Geburtsdatum\n"
+            "**6.** E-Mail\n"
+            "**7.** Telefon\n"
+            "**8.** Straße\n"
+            "**9.** Hausnummer\n"
+            "**10.** Hausnummernzusatz\n"
+            "**11.** PLZ\n"
+            "**12.** Ort\n"
+            "**13.** Land\n\n"
+            "**Beispiele:**\n"
+            "• '6' oder 'Email' - um E-Mail zu ändern\n"
+            "• '8' oder 'Straße' - um Straße zu korrigieren\n\n"
+            "**Oder sagen Sie:**\n"
+            "• **'Zurück'** - zur Zusammenfassung\n"
+            "• **'Neustart'** - komplett von vorne"
+        )
+
+        await turn_context.send_activity(MessageFactory.text(correction_options))
+        # Set the dialogue state to indicate that the bot is waiting for a correction selection
+        await self.dialog_state_accessor.set(turn_context, "correction_selection")
+
+    async def _handle_correction_selection(self, turn_context: TurnContext, user_profile, user_input):
+        #  Handles the user's selection of which field to correct
+        user_input_lower = user_input.lower().strip()
+
+        # Mapping of user input (numbers and text) to the corresponding dialogue states
+        # for asking the specific field
+
+        # Number mapping
+        correction_mapping = {
+            "1": DialogState.ASK_GENDER,
+            "2": DialogState.ASK_TITLE,
+            "3": DialogState.ASK_FIRST_NAME,
+            "4": DialogState.ASK_LAST_NAME,
+            "5": DialogState.ASK_BIRTHDATE,
+            "6": DialogState.ASK_EMAIL,
+            "7": DialogState.ASK_PHONE,
+            "8": DialogState.ASK_STREET,
+            "9": DialogState.ASK_HOUSE_NUMBER,
+            "10": DialogState.ASK_HOUSE_ADDITION,
+            "11": DialogState.ASK_POSTAL,
+            "12": DialogState.ASK_CITY,
+            "13": DialogState.ASK_COUNTRY,
+
+            # text based mapping
+            "geschlecht": DialogState.ASK_GENDER,
+            "titel": DialogState.ASK_TITLE,
+            "vorname": DialogState.ASK_FIRST_NAME,
+            "nachname": DialogState.ASK_LAST_NAME,
+            "name": DialogState.ASK_FIRST_NAME,
+            "geburtsdatum": DialogState.ASK_BIRTHDATE,
+            "geburtstag": DialogState.ASK_BIRTHDATE,
+            "email": DialogState.ASK_EMAIL,
+            "e-mail": DialogState.ASK_EMAIL,
+            "mail": DialogState.ASK_EMAIL,
+            "telefon": DialogState.ASK_PHONE,
+            "phone": DialogState.ASK_PHONE,
+            "handy": DialogState.ASK_PHONE,
+            "straße": DialogState.ASK_STREET,
+            "strasse": DialogState.ASK_STREET,
+            "adresse": DialogState.ASK_STREET,
+            "hausnummer": DialogState.ASK_HOUSE_NUMBER,
+            "nummer": DialogState.ASK_HOUSE_NUMBER,
+            "hausnummernzusatz": DialogState.ASK_HOUSE_ADDITION,
+            "zusatz": DialogState.ASK_HOUSE_ADDITION,
+            "plz": DialogState.ASK_POSTAL,
+            "postleitzahl": DialogState.ASK_POSTAL,
+            "ort": DialogState.ASK_CITY,
+            "stadt": DialogState.ASK_CITY,
+            "city": DialogState.ASK_CITY,
+            "land": DialogState.ASK_COUNTRY,
+            "country": DialogState.ASK_COUNTRY
+        }
+
+        # Handle special commands like "back" or "restart"
+        if user_input_lower in ["zurück", "back", "summary", "zusammenfassung"]:
+            await self._show_final_summary(turn_context)
+            return
+
+        elif user_input_lower in ["neustart", "restart", "von vorne"]:
+            await self._handle_restart_request(turn_context)
+            return
+
+        # Process the correction selection by iterating through the mapping
+        target_state = None
+        selected_field = None
+
+        for key, state in correction_mapping.items():
+            # Check if the input contains a valid key
+            if key in user_input_lower:
+                target_state = state
+                selected_field = key
+                break
+
+        if target_state:
+            # Confirm the selection and jump to the appropriate state for re-entering the data
+            field_names = {
+                DialogState.ASK_GENDER: "Geschlecht",
+                DialogState.ASK_TITLE: "Titel",
+                DialogState.ASK_FIRST_NAME: "Vorname",
+                DialogState.ASK_LAST_NAME: "Nachname",
+                DialogState.ASK_BIRTHDATE: "Geburtsdatum",
+                DialogState.ASK_EMAIL: "E-Mail",
+                DialogState.ASK_PHONE: "Telefonnummer",
+                DialogState.ASK_STREET: "Straße",
+                DialogState.ASK_HOUSE_NUMBER: "Hausnummer",
+                DialogState.ASK_HOUSE_ADDITION: "Hausnummernzusatz",
+                DialogState.ASK_POSTAL: "Postleitzahl",
+                DialogState.ASK_CITY: "Ort",
+                DialogState.ASK_COUNTRY: "Land"
+            }
+
+            # Get display name or default value
+            field_display = field_names.get(target_state, "das gewählte Feld")
+
+            # text for the correction message
+            correction_start_message = (
+                f"**Korrektur: {field_display}**\n\n"
+                f"Sie möchten {field_display} ändern."
+                f"Bitte geben Sie den neuen Wert ein:"
+            )
+
+            # send text
+            await turn_context.send_activity(MessageFactory.text(correction_start_message))
+
+            # Set the dialogue state to the target field, prompting for new input
+            await self.dialog_state_accessor.set(turn_context, target_state)
+
+            # Mark that the bot is in correction mode and where to return after correction.
+            user_profile['correction_mode'] = True
+            user_profile['correction_return_to'] = 'final_summary'
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+        else:
+            # not understood output text
+            help_message = (
+                "**Ich habe das nicht verstanden.**\n\n"
+                "Bitte wählen Sie:\n"
+                "• **Eine Nummer** (1-13)\n"
+                "• **Einen Feldnamen** (z.B. 'Email', 'Adresse')\n"
+                "• **'Zurück'** zur Zusammenfassung\n"
+                "• **'Neustart'** für kompletten Neustart\n\n"
+                "**Was möchten Sie korrigieren?**"
+            )
+            await turn_context.send_activity(MessageFactory.text(help_message))
+
+    async def _handle_restart_request(self, turn_context: TurnContext):
+       # Handles requests to restart the entire registration process
+        restart_message = (
+            "**Neustart wird gestartet...**\n\n"
+            "Alle bisherigen Eingaben werden gelöscht und wir beginnen von vorne."
+        )
+        await turn_context.send_activity(MessageFactory.text(restart_message))
+
+
+        # Reset user profile and dialogue state to start fresh
+        await self.user_profile_accessor.set(turn_context, {})
+        await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
+
+        # start new registration
+        await self._handle_greeting(turn_context, {})
+
+
+
+    async def _check_correction_mode_and_handle(self, turn_context: TurnContext, user_profile,
+                                                field_name, field_display, new_value):
+        # Method to handle post-input logic when in correction mode
+        #  If in correction mode, it confirms the correction and returns to the summary
+        #  Otherwise, it returns False to continue with normal dialogue flow
+
+        if user_profile.get('correction_mode'):
+            # Correction completed - confirm and return to summary
+            correction_success_message = (
+                f"✅ **{field_display} korrigiert!**\n\n"
+                f"Neuer Wert: {new_value}\n\n"
+                f"Zurück zur Zusammenfassung..."
+            )
+            await turn_context.send_activity(MessageFactory.text(correction_success_message))
+
+            # exit mode
+            user_profile['correction_mode'] = False
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # return back to summary
+            await self._show_final_summary(turn_context)
+            return True  # Indicate that correction mode was active and correct handled
+
+        return False  # Indicate that normal mode should continue
+
+    async def _handle_completed_state(self, turn_context: TurnContext, user_profile, user_input):
+        #  Handles messages received when the registration process is in a completed state
+        user_input_lower = user_input.lower()
+
+        # Keywords to detect if the user wants to start a new registration
+        restart_keywords = [
+            'hallo', 'hello', 'hi', 'neu', 'nochmal', 'wieder', 'start',
+            'registrierung', 'anmelden', 'beginnen', 'restart', 'new'
+        ]
+
+        if any(keyword in user_input_lower for keyword in restart_keywords):
+            # Check if the previous registration was cancelled
+            if user_profile.get('registration_cancelled'):
+                restart_message = (
+                    "**Neue Registrierung starten**\n\n"
+                    "Möchten Sie es nochmal versuchen? Ich starte gerne eine neue Registrierung für Sie.\n\n"
+                    "Hier nochmal die Information zu unserem Prozess:"
+                )
+                await turn_context.send_activity(MessageFactory.text(restart_message))
+
+                # reset and restart registration
+                await self.user_profile_accessor.set(turn_context, {})
                 await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
-                await self._handle_greeting(turn_context,
-                                            await self.user_profile_accessor.get(turn_context, lambda: {}))
-                break  # Nur einmal begrüßen, auch wenn mehrere Mitglieder hinzugefügt werden
 
-        # Zustand nach jeder Runde speichern
-        await self.conversation_state.save_changes(turn_context)
-        await self.user_state.save_changes(turn_context)
+                # Start the new registration
+                await self._handle_greeting(turn_context, {})
 
-    # --- Dialog-Schritt-Handler (Bleiben weitgehend gleich) ---
+            elif user_profile.get('consent_given') and not user_profile.get('registration_cancelled'):
+                # Registration was successful
+                success_message = (
+                    "**Registrierung bereits abgeschlossen**\n\n"
+                    "Sie haben sich bereits erfolgreich registriert! "
+                    "Falls Sie Änderungen vornehmen möchten, wenden Sie sich bitte an unseren Support.\n\n"
+                    "Haben Sie noch andere Fragen?"
+                )
+                await turn_context.send_activity(MessageFactory.text(success_message))
+        else:
+            # Other inquiries after registration is completed
+            if user_profile.get('registration_cancelled'):
+                help_message = (
+                    "**Registrierung wurde abgebrochen**\n\n"
+                    "Falls Sie Ihre Meinung geändert haben, sagen Sie einfach:\n"
+                    "• **'Hallo'** oder **'Neu'** - um eine neue Registrierung zu starten\n\n"
+                    "Ansonsten helfe ich Ihnen gerne bei anderen Fragen."
+                )
+            else:
+                help_message = (
+                    "**Registrierung bereits abgeschlossen**\n\n"
+                    "Ihre Registrierung war erfolgreich! Bei Fragen wenden Sie sich bitte an unseren Support.\n\n"
+                    "Oder sagen Sie **'Hallo'** um eine neue Registrierung für eine andere Person zu starten."
+                )
+
+            await turn_context.send_activity(MessageFactory.text(help_message))
+
+    async def _handle_unknown_state(self, turn_context: TurnContext, user_profile, user_input):
+      #  Handles situations where the bot is in an unknown or unexpected dialogue state
+      # try to bring back a known state or worse, restart the process
+        user_input_lower = user_input.lower()
+
+        # check for the restart keywords
+        restart_keywords = ['hallo', 'hello', 'hi', 'start', 'neu', 'beginnen']
+
+        if any(keyword in user_input_lower for keyword in restart_keywords):
+            # user wants a restart
+            restart_message = (
+                "**Neustart erkannt**\n\n"
+                "Ich starte eine neue Registrierung für Sie."
+            )
+            await turn_context.send_activity(MessageFactory.text(restart_message))
+
+            # reset state and set to registration beginning
+            await self.user_profile_accessor.set(turn_context, {})
+            await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
+
+            # start new registration
+            await self._handle_greeting(turn_context, {})
+        else:
+            # Unknown state + no restart keywords
+            confusion_message = (
+                "**Entschuldigung, ich bin verwirrt.**\n\n"
+                "Es scheint ein Problem mit dem Dialog-Verlauf aufgetreten zu sein.\n\n"
+                "Sagen Sie einfach **'Hallo'** um eine neue Registrierung zu beginnen."
+            )
+            await turn_context.send_activity(MessageFactory.text(confusion_message))
+
+            # Reset state to COMPLETED, but do NOT automatically start a new registration
+            await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
 
     async def _handle_greeting(self, turn_context: TurnContext, user_profile, *args):
-        """Startet den Registrierungsdialog mit einer Begrüßung."""
+        # Starts the registration dialogue with a welcome message and explanation of the process
         welcome_message = (
-            "Hallo! Willkommen bei unserem Kundenregistrierungsbot.\n\n"
+            "**Willkommen bei unserem Kundenregistrierungsbot!**\n\n"
             "Ich helfe Ihnen dabei, ein neues Kundenkonto zu erstellen. "
-            "Dafür benötige ich einige persönliche Informationen von Ihnen.\n\n"
-            "Lassen Sie uns beginnen!"
+            "Dafür benötige ich einige persönliche Informationen von Ihnen:\n\n"
+            "**Was wir erfassen:**\n"
+            "• Persönliche Daten (Name, Geburtsdatum)\n"
+            "• Kontaktinformationen (E-Mail, Telefon)\n"
+            "• Adressdaten (Straße, PLZ, Stadt, Land)\n\n"
+            "**Datenschutz:** Ihre Daten werden sicher gespeichert und nur für die Kontoverwaltung verwendet.\n\n"
+            "**Sind Sie einverstanden mit diesem Registrierungsprozess?**\n"
+            "Antworten Sie mit **'Ja'** um fortzufahren\n"
+            "Antworten Sie mit **'Nein'** um abzubrechen"
         )
         await turn_context.send_activity(MessageFactory.text(welcome_message))
-        await self._ask_for_gender(turn_context)
+        # Transition to the next state
+        await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CONSENT)
+
+    async def _handle_consent_input(self, turn_context: TurnContext, user_profile, user_input):
+        # Processes the user's input regarding consent
+        user_input_lower = user_input.lower().strip()
+
+        positive_responses = [
+            'ja', 'yes', 'ok', 'okay', 'einverstanden', 'zustimmung',
+            'zustimmen', 'akzeptieren', 'weiter', 'fortfahren', 'gerne',
+            'si', 'oui', 'sí', '✓', '👍', 'y'
+        ]
+
+
+        negative_responses = [
+            'nein', 'no', 'nicht einverstanden', 'ablehnen', 'abbrechen',
+            'stop', 'halt', 'nee', 'nö', 'non', '✗', '👎', 'n'
+        ]
+
+        if any(response in user_input_lower for response in positive_responses):
+            # User agrees - start registration
+            confirmation_message = (
+                "**Vielen Dank für Ihr Einverständnis!**\n\n"
+                "Die Registrierung beginnt jetzt. Lassen Sie uns mit Ihrem Geschlecht beginnen."
+            )
+            await turn_context.send_activity(MessageFactory.text(confirmation_message))
+            user_profile['consent_given'] = True
+            user_profile['consent_timestamp'] = datetime.now().isoformat()
+            await self.user_profile_accessor.set(turn_context, user_profile)
+            # Proceed to ask for gender
+            await self._ask_for_gender(turn_context)
+
+        elif any(response in user_input_lower for response in negative_responses):
+            # User doesnt agrees - end the registration
+            decline_message = (
+                "❌ **Registrierung abgebrochen**\n\n"
+                "Ich verstehe, dass Sie nicht fortfahren möchten. "
+                "Die Registrierung wurde beendet.\n\n"
+                "Falls Sie Ihre Meinung ändern, können Sie jederzeit eine neue "
+                "Konversation beginnen und 'Hallo' sagen.\n\n"
+                "Haben Sie noch einen schönen Tag!"
+            )
+            await turn_context.send_activity(MessageFactory.text(decline_message))
+
+            # End the dialogue and reset state, marking registration as cancelled
+            await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
+            await self.user_profile_accessor.set(turn_context, {
+                'consent_given': False,
+                'consent_timestamp': datetime.now().isoformat(),
+                'registration_cancelled': True
+            })
+
+        else:
+            # unclear anwser - ask again
+            clarification_message = (
+                " **Entschuldigung, das habe ich nicht verstanden.**\n\n"
+                "Bitte antworten Sie klar mit:\n"
+                "**'Ja'** - um mit der Registrierung fortzufahren\n"
+                " **'Nein'** - um den Prozess abzubrechen\n\n"
+                "**Sind Sie einverstanden mit dem Registrierungsprozess?**"
+            )
+            await turn_context.send_activity(MessageFactory.text(clarification_message))
 
     async def _ask_for_gender(self, turn_context: TurnContext):
-        """Fragt nach dem Geschlecht des Benutzers."""
+        # Asks the user for their gender, providing options
         gender_message = (
             "Bitte wählen Sie Ihr Geschlecht:\n\n"
             "1 **Männlich**\n"
@@ -145,10 +495,11 @@ class RegistrationTextBot(ActivityHandler):
             "Sie können die Nummer oder den Begriff eingeben."
         )
         await turn_context.send_activity(MessageFactory.text(gender_message))
+        # Transition to the next state
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_GENDER)
 
     async def _handle_gender_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für das Geschlecht."""
+        #  Processes the user's input for gender
         gender_map = {
             "1": ("male", "Männlich"), "männlich": ("male", "Männlich"), "male": ("male", "Männlich"),
             "2": ("female", "Weiblich"), "weiblich": ("female", "Weiblich"), "female": ("female", "Weiblich"),
@@ -162,15 +513,23 @@ class RegistrationTextBot(ActivityHandler):
             user_profile['gender'] = gender_value
             user_profile['gender_display'] = gender_display
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # if the user is correcting mode and wants to correct the answer
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'gender', 'Geschlecht', gender_display):
+                return
+
+            # set valid value
             await self._confirm_field(turn_context, "Geschlecht", gender_display, DialogState.CONFIRM_PREFIX + "gender")
         else:
+            # if it isnt correct, reprompt
             await turn_context.send_activity(
                 MessageFactory.text(
                     "Bitte wählen Sie eine gültige Option (1-4) oder geben Sie das Geschlecht direkt ein.")
             )
 
     async def _ask_for_title(self, turn_context: TurnContext):
-        """Fragt nach dem akademischen Titel."""
+       # Asks the user for their academic title
         title_message = (
             "Haben Sie einen akademischen Titel? (optional)\n\n"
             "**Verfügbare Titel:**\n"
@@ -183,7 +542,7 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_TITLE)
 
     async def _handle_title_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für den Titel."""
+        # Processes the user's input for academic title
         valid_titles = [
             "Dr.", "Prof.", "Prof. Dr.", "Prof. Dr. Dr.", "Dipl.-Ing.",
             "Dr.-Ing.", "Dr. phil.", "Dr. jur.", "Dr. med.", "Mag.", "Lic.", "Ph.D."
@@ -193,47 +552,78 @@ class RegistrationTextBot(ActivityHandler):
         user_input_strip_lower = user_input.strip().lower()
 
         if user_input_strip_lower in no_title_keywords:
-            user_profile['title'] = ''  # Interner Wert für "Kein Titel" (leer String)
-            user_profile['title_display'] = "Kein Titel"  # Für die Anzeige
+            # Store empty string if no title
+            user_profile['title'] = ''
+            # Display text for no title
+            user_profile['title_display'] = "Kein Titel"
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # Check and handle correction mode
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'title', 'Titel', "Kein Titel"):
+                return
+
+            # if not set the value
             await self._confirm_field(turn_context, "Titel", "Kein Titel", DialogState.CONFIRM_PREFIX + "title")
-        elif user_input in valid_titles:  # Prüfen, ob die exakte Eingabe in den validen Titeln ist
-            user_profile['title'] = user_input  # Interner Wert ist der Titel selbst
-            user_profile['title_display'] = user_input  # Für die Anzeige
+        # Check for exact match with valid title
+        elif user_input in valid_titles:
+            user_profile['title'] = user_input
+            user_profile['title_display'] = user_input
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # Check and handle correction mode
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'title', 'Titel', user_input):
+                return
+
             await self._confirm_field(turn_context, "Titel", user_input, DialogState.CONFIRM_PREFIX + "title")
         else:
+            # Invalid input
             await turn_context.send_activity(
                 MessageFactory.text("Bitte wählen Sie einen gültigen Titel aus der Liste oder geben Sie 'kein' ein.")
             )
 
     async def _ask_for_first_name(self, turn_context: TurnContext):
-        """Fragt nach dem Vornamen."""
+        # Asks the user for their first name
         await turn_context.send_activity(MessageFactory.text("Bitte geben Sie Ihren **Vornamen** ein:"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_FIRST_NAME)
 
     async def _handle_first_name_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für den Vornamen."""
-        if self._validate_name_part(user_input):
+        # validate user input
+        if DataValidator.validate_name_part(user_input):
             user_profile['first_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # check if correction mode is true
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'first_name', 'Vorname', user_input):
+                return
+
+            # if not, set name
             await self._confirm_field(turn_context, "Vorname", user_input, DialogState.CONFIRM_PREFIX + "first_name")
         else:
+            # if not valid raise a message
             await turn_context.send_activity(
                 MessageFactory.text(
                     "Bitte geben Sie einen gültigen Vornamen ein (mindestens 2 Zeichen, nur Buchstaben):")
             )
 
     async def _ask_for_last_name(self, turn_context: TurnContext):
-        """Fragt nach dem Nachnamen."""
+        # Asks the user for their last name
         await turn_context.send_activity(MessageFactory.text("Bitte geben Sie Ihren **Nachnamen** ein:"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_LAST_NAME)
 
     async def _handle_last_name_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für den Nachnamen."""
-        if self._validate_name_part(user_input):
+        #  Processes the user's input for the last name
+        if DataValidator.validate_name_part(user_input):
             user_profile['last_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # Check and handle correction mode
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'last_name', 'Nachname', user_input):
+                return
+
             await self._confirm_field(turn_context, "Nachname", user_input, DialogState.CONFIRM_PREFIX + "last_name")
         else:
             await turn_context.send_activity(
@@ -241,7 +631,7 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_birthdate(self, turn_context: TurnContext):
-        """Fragt nach dem Geburtsdatum."""
+        # Asks the user for their birthdate in  TT.MM.JJJJ format
         await turn_context.send_activity(
             MessageFactory.text(
                 "Bitte geben Sie Ihr **Geburtsdatum** ein (Format: TT.MM.JJJJ):\n\nBeispiel: 15.03.1990")
@@ -249,34 +639,50 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_BIRTHDATE)
 
     async def _handle_birthdate_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für das Geburtsdatum."""
-        birthdate = self._validate_birthdate(user_input)
+         # Processes the user's input for birthdate
+         # and validate them
+        birthdate = DataValidator.validate_birthdate(user_input)
         if birthdate:
             user_profile['birth_date'] = birthdate.strftime('%Y-%m-%d')
             user_profile['birth_date_display'] = user_input
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            # Check and handle correction mode
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'birth_date', 'Geburtsdatum', user_input):
+                return
+
             await self._confirm_field(turn_context, "Geburtsdatum", user_input,
                                       DialogState.CONFIRM_PREFIX + "birthdate")
         else:
+            # Invalid input
             await turn_context.send_activity(
                 MessageFactory.text("Bitte geben Sie ein gültiges Geburtsdatum im Format TT.MM.JJJJ ein:")
             )
 
     async def _ask_for_email(self, turn_context: TurnContext):
-        """Fragt nach der E-Mail-Adresse."""
+        # Asks the user for their email address
         await turn_context.send_activity(MessageFactory.text("Bitte geben Sie Ihre **E-Mail-Adresse** ein:"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_EMAIL)
 
     async def _handle_email_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für die E-Mail-Adresse."""
-        if self._validate_email(user_input):
-            if await self._email_exists_in_db(user_input.strip().lower()):
-                await turn_context.send_activity(MessageFactory.text(
-                    "Diese E-Mail-Adresse ist bereits registriert. Bitte geben Sie eine andere E-Mail ein."))
-                return
+       # Processes the user's input for the email address
+       # check if the email is already in use
+        if DataValidator.validate_email(user_input):
+            # The prompt was cut off here. Assuming it continues with validation and state handling
+            if not user_profile.get('correction_mode'):
+                if await self.customer_service.email_exists_in_db(user_input.strip().lower()):
+                    await turn_context.send_activity(MessageFactory.text(
+                        "Diese E-Mail-Adresse ist bereits registriert. Bitte geben Sie eine andere E-Mail ein."))
+                    return
 
             user_profile['email'] = user_input.strip().lower()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'email', 'E-Mail', user_input):
+                return
+
             await self._confirm_field(turn_context, "E-Mail", user_input, DialogState.CONFIRM_PREFIX + "email")
         else:
             await turn_context.send_activity(
@@ -284,7 +690,7 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_phone(self, turn_context: TurnContext):
-        """Fragt nach der Telefonnummer."""
+        # ask for the phone number
         await turn_context.send_activity(
             MessageFactory.text(
                 "Bitte geben Sie Ihre **Telefonnummer** ein:\n\n"
@@ -297,12 +703,17 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_PHONE)
 
     async def _handle_phone_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für die Telefonnummer."""
-        phone_number_obj = self._validate_phone(user_input)
+        # Processes the user's input for the phone number
+        phone_number_obj = DataValidator.validate_phone(user_input)
         if phone_number_obj:
             user_profile['telephone'] = phone_number_obj.as_e164
             user_profile['telephone_display'] = user_input
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'telephone', 'Telefonnummer', user_input):
+                return
+
             await self._confirm_field(turn_context, "Telefonnummer", user_input, DialogState.CONFIRM_PREFIX + "phone")
         else:
             await turn_context.send_activity(
@@ -310,17 +721,22 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_street(self, turn_context: TurnContext):
-        """Fragt nach der Straße."""
+       # Asks the user for their street name
         await turn_context.send_activity(
             MessageFactory.text("Bitte geben Sie Ihre **Straße** ein (ohne Hausnummer):\n\nBeispiel: Musterstraße")
         )
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_STREET)
 
     async def _handle_street_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für die Straße."""
+       # Processes the user's input for the street name
         if len(user_input.strip()) >= 3 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', user_input.strip()):
             user_profile['street_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'street_name', 'Straße', user_input):
+                return
+
             await self._confirm_field(turn_context, "Straße", user_input, DialogState.CONFIRM_PREFIX + "street")
         else:
             await turn_context.send_activity(
@@ -329,7 +745,7 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_house_number(self, turn_context: TurnContext):
-        """Fragt nach der Hausnummer."""
+        # Asks the user for their house number
         await turn_context.send_activity(
             MessageFactory.text("Bitte geben Sie Ihre **Hausnummer** ein:\n\nBeispiel: 42"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_NUMBER)
@@ -341,6 +757,11 @@ class RegistrationTextBot(ActivityHandler):
             if house_number > 0:
                 user_profile['house_number'] = house_number
                 await self.user_profile_accessor.set(turn_context, user_profile)
+
+                if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                'house_number', 'Hausnummer', str(house_number)):
+                    return
+
                 await self._confirm_field(turn_context, "Hausnummer", str(house_number),
                                           DialogState.CONFIRM_PREFIX + "house_number")
             else:
@@ -351,7 +772,7 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_house_addition(self, turn_context: TurnContext):
-        """Fragt nach dem Hausnummernzusatz."""
+        # Processes the user's input for the house number
         await turn_context.send_activity(
             MessageFactory.text(
                 "Haben Sie einen **Hausnummernzusatz**? (optional)\n\n"
@@ -362,31 +783,47 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_ADDITION)
 
     async def _handle_house_addition_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für den Hausnummernzusatz."""
+        # Asks the user for their house number addition (optional)
         if user_input.lower() in ["kein", "keiner", "nein", "keine", "-", ""]:
             user_profile['house_number_addition'] = ""
             user_profile['house_addition_display'] = "Kein Zusatz"
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'house_number_addition', 'Hausnummernzusatz',
+                                                            "Kein Zusatz"):
+                return
+
             await self._confirm_field(turn_context, "Hausnummernzusatz", "Kein Zusatz",
                                       DialogState.CONFIRM_PREFIX + "house_addition")
         else:
             user_profile['house_number_addition'] = user_input.strip()
             user_profile['house_addition_display'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'house_number_addition', 'Hausnummernzusatz', user_input):
+                return
+
             await self._confirm_field(turn_context, "Hausnummernzusatz", user_input,
                                       DialogState.CONFIRM_PREFIX + "house_addition")
 
     async def _ask_for_postal(self, turn_context: TurnContext):
-        """Fragt nach der Postleitzahl."""
+        # Asks the user for their postal code
         await turn_context.send_activity(
             MessageFactory.text("Bitte geben Sie Ihre **Postleitzahl** ein:\n\nBeispiel: 12345"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_POSTAL)
 
     async def _handle_postal_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für die Postleitzahl."""
-        if self._validate_postal_code(user_input):
+        # Asks the user for their city
+        if DataValidator.validate_postal_code(user_input):
             user_profile['postal_code'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'postal_code', 'Postleitzahl', user_input):
+                return
+
             await self._confirm_field(turn_context, "Postleitzahl", user_input, DialogState.CONFIRM_PREFIX + "postal")
         else:
             await turn_context.send_activity(
@@ -394,13 +831,13 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_city(self, turn_context: TurnContext):
-        """Fragt nach dem Ort/Stadt."""
+        # asks the user of their city
         await turn_context.send_activity(
             MessageFactory.text("Bitte geben Sie Ihren **Ort/Stadt** ein:\n\nBeispiel: Berlin"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CITY)
 
     async def _handle_city_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für den Ort/Stadt."""
+        # Processes the user's input for the city
         if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', user_input.strip()):
             user_profile['city'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -412,16 +849,21 @@ class RegistrationTextBot(ActivityHandler):
             )
 
     async def _ask_for_country(self, turn_context: TurnContext):
-        """Fragt nach dem Land."""
+        # Asks the user for their country
         await turn_context.send_activity(
             MessageFactory.text("Bitte geben Sie Ihr **Land** ein:\n\nBeispiel: Deutschland"))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_COUNTRY)
 
     async def _handle_country_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Verarbeitet die Eingabe für das Land."""
+         # process the user input
         if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', user_input.strip()):
             user_profile['country_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'country_name', 'Land', user_input):
+                return
+
             await self._confirm_field(turn_context, "Land", user_input, DialogState.CONFIRM_PREFIX + "country")
         else:
             await turn_context.send_activity(
@@ -484,17 +926,24 @@ class RegistrationTextBot(ActivityHandler):
         address_text = " ".join(filter(None, address_parts))
 
         summary = (
-            " **Zusammenfassung Ihrer Angaben:**\n\n"
-            f" **Geschlecht:** {user_profile.get('gender_display', 'Nicht angegeben')}\n"
-            f" **Titel:** {title_text}\n"
-            f" **Name:** {name_text}\n"
-            f" **Geburtsdatum:** {user_profile.get('birth_date_display', 'Nicht angegeben')}\n"
-            f" **E-Mail:** {user_profile.get('email', 'Nicht angegeben')}\n"
-            f" **Telefon:** {user_profile.get('telephone_display', 'Nicht angegeben')}\n"
-            f" **Adresse:** {address_text}\n"
-            f" **PLZ/Ort:** {user_profile.get('postal_code', 'Nicht angegeben')} {user_profile.get('city', 'Nicht angegeben')}\n"
-            f" **Land:** {user_profile.get('country_name', 'Nicht angegeben')}\n\n"
-            "Sind alle Angaben korrekt und soll ich das Konto erstellen? (ja/nein)"
+            "**Zusammenfassung Ihrer Angaben:**\n\n"
+            f"**1. Geschlecht:** {user_profile.get('gender_display', 'Nicht angegeben')}\n"
+            f"**2. Titel:** {title_text}\n"
+            f"**3. Vorname:** {user_profile.get('first_name', 'Nicht angegeben')}\n"
+            f"**4. Nachname:** {user_profile.get('last_name', 'Nicht angegeben')}\n"
+            f"**5. Geburtsdatum:** {user_profile.get('birth_date_display', 'Nicht angegeben')}\n"
+            f"**6. E-Mail:** {user_profile.get('email', 'Nicht angegeben')}\n"
+            f"**7. Telefon:** {user_profile.get('telephone_display', 'Nicht angegeben')}\n"
+            f"**8. Straße:** {user_profile.get('street_name', 'Nicht angegeben')}\n"
+            f"**9. Hausnummer:** {user_profile.get('house_number', 'Nicht angegeben')}\n"
+            f"**10. Hausnummernzusatz:** {user_profile.get('house_addition_display', 'Kein Zusatz')}\n"
+            f"**11. PLZ:** {user_profile.get('postal_code', 'Nicht angegeben')}\n"
+            f"**12. Ort:** {user_profile.get('city', 'Nicht angegeben')}\n"
+            f"**13. Land:** {user_profile.get('country_name', 'Nicht angegeben')}\n\n"
+            "**Sind alle Angaben korrekt?**\n"
+            "• **'Ja'** - Konto erstellen\n"
+            "• **'Nein'** - Daten korrigieren\n"
+            "• **'Neustart'** - von vorne beginnen"
         )
 
         await turn_context.send_activity(MessageFactory.text(summary))
@@ -502,149 +951,150 @@ class RegistrationTextBot(ActivityHandler):
 
     async def _handle_final_confirmation(self, turn_context: TurnContext, user_profile, user_input):
         """Behandelt die finale Bestätigung und speichert die Daten."""
-        user_input_lower = user_input.lower()
-        if user_input_lower in ["ja", "j", "yes", "y", "richtig", "korrekt", "ok"]:
+        user_input_lower = user_input.lower().strip()
+
+        # Positive Bestätigung
+        positive_responses = ["ja", "j", "yes", "y", "richtig", "korrekt", "ok", "okay", "bestätigen"]
+
+        # Negative Antworten (für Korrektur)
+        negative_responses = ["nein", "n", "no", "falsch", "inkorrekt", "korrigieren", "ändern"]
+
+        # Neustart-Keywords
+        restart_responses = ["neustart", "restart", "nochmal", "von vorne", "neu beginnen"]
+
+        if any(response in user_input_lower for response in positive_responses):
+            # Daten speichern
+            await turn_context.send_activity(MessageFactory.text("💾 **Speichere Ihre Daten...**"))
+
             success = await self._save_customer_data(user_profile)
+
             if success:
-                await turn_context.send_activity("Ihre Daten wurden erfolgreich gespeichert! Ihr Konto wurde erstellt.")
-                await turn_context.send_activity(
-                    "Vielen Dank für Ihre Registrierung! Sie können mich jederzeit erneut ansprechen, wenn Sie Fragen haben.")
-                await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
-                await self.user_profile_accessor.set(turn_context, {})
-            else:
-                await turn_context.send_activity(
-                    "Entschuldigung, beim Speichern Ihrer Daten ist ein Problem aufgetreten. Bitte versuchen Sie es später erneut."
+                success_message = (
+                    "**Registrierung erfolgreich abgeschlossen!**\n\n"
+                    "Ihre Daten wurden erfolgreich gespeichert\n"
+                    "Ihr Kundenkonto wurde erstellt\n\n"
+                    "Vielen Dank für Ihre Registrierung! 😊"
                 )
+                await turn_context.send_activity(MessageFactory.text(success_message))
+
+                await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
+                await self.user_profile_accessor.set(turn_context, {
+                    'registration_completed': True,
+                    'completion_timestamp': datetime.now().isoformat()
+                })
+            else:
+                error_message = (
+                    "❌ **Fehler beim Speichern**\n\n"
+                    "Entschuldigung, beim Speichern ist ein Problem aufgetreten.\n"
+                    "• **'Nochmal'** - erneut versuchen\n"
+                    "• **'Neustart'** - von vorne beginnen"
+                )
+                await turn_context.send_activity(MessageFactory.text(error_message))
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
-        elif user_input_lower in ["nein", "n", "no", "falsch", "inkorrekt"]:
-            await turn_context.send_activity("Registrierung abgebrochen. Sie können jederzeit neu starten.")
-            await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
-            await self.user_profile_accessor.set(turn_context, {})
+
+        elif any(response in user_input_lower for response in negative_responses):
+            # Benutzer möchte Daten korrigieren
+            await self._start_correction_process(turn_context, user_profile)
+
+        elif any(response in user_input_lower for response in restart_responses):
+            # Komplett neu starten
+            await self._handle_restart_request(turn_context)
+
         else:
-            await turn_context.send_activity("Bitte antworten Sie mit 'ja' oder 'nein'.")
-
-    # --- Validierungsmethoden ---
-
-    def _validate_name_part(self, name: str) -> bool:
-        """Validiert Vornamen und Nachnamen."""
-        return len(name.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\']+$', name.strip()) is not None
-
-    def _validate_birthdate(self, date_str: str) -> datetime | None:
-        """Validiert das Geburtsdatum (TT.MM.JJJJ) und das Alter."""
-        try:
-            date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
-            today = datetime.now().date()
-            if date_obj < today and (today.year - date_obj.year) < 150:
-                return date_obj
-        except ValueError:
-            pass
-        return None
-
-    def _validate_email(self, email: str) -> bool:
-        """Validiert eine E-Mail-Adresse."""
-        try:
-            validate_email(email)
-            return True
-        except ValidationError:
-            return False
-
-    async def _email_exists_in_db(self, email: str) -> bool:
-        """Prüft asynchron, ob eine E-Mail bereits in der Datenbank existiert."""
-        return await sync_to_async(CustomerContact.objects.filter(email=email).exists)()
-
-    def _validate_phone(self, phone_str: str) -> PhoneNumber | None:
-        """Validiert eine deutsche Telefonnummer und gibt ein PhoneNumber-Objekt zurück."""
-        try:
-            parsed_number = parse(phone_str, "DE")
-            if is_valid_number(parsed_number):
-                return PhoneNumber.from_string(phone_str, region="DE")
-        except NumberParseException:
-            pass
-        return None
-
-    def _validate_postal_code(self, postal_code: str) -> bool:
-        """Validiert eine deutsche Postleitzahl (5 Ziffern)."""
-        return re.match(r'^\d{5}$', postal_code.strip()) is not None
-
-    # --- Datenbank-Speicherlogik (asynchron) ---
+            # Unklare Antwort
+            clarification_message = (
+                "**Bitte präzisieren Sie:**\n\n"
+                "• **'Ja'** - alle Daten sind korrekt, Konto erstellen\n"
+                "• **'Nein'** - ich möchte etwas korrigieren\n"
+                "• **'Neustart'** - komplett von vorne beginnen"
+            )
+            await turn_context.send_activity(MessageFactory.text(clarification_message))
 
     async def _save_customer_data(self, user_profile: dict) -> bool:
         """
-        Speichert die gesammelten Benutzerdaten in den Django-Modellen.
-        Alle Datenbankoperationen sind asynchron umschlossen.
+        Speichert die gesammelten Benutzerdaten über den CustomerService.
+        Verarbeitet die Daten vor und delegiert die DB-Operationen an den Service.
         """
         try:
-            async def _get_or_create(model, **kwargs):
-                return await sync_to_async(model.objects.get_or_create)(**kwargs)
-
-            async def _create(model, **kwargs):
-                return await sync_to_async(model.objects.create)(**kwargs)
-
-            country_obj, _ = await _get_or_create(
-                AddressCountry, country_name=user_profile['country_name']
-            )
-
-            street_obj, _ = await _get_or_create(
-                AddressStreet, street_name=user_profile['street_name']
-            )
-
-            city_obj, _ = await _get_or_create(
-                AddressCity,
-                city=user_profile['city'],
-                postal_code=user_profile['postal_code'],
-                country=country_obj
-            )
-
-            address_obj = await _create(
-                Address,
-                street=street_obj,
-                house_number=user_profile['house_number'],
-                house_number_addition=user_profile.get('house_number_addition', ''),
-                place=city_obj
-            )
-
-            birth_date_obj = datetime.strptime(user_profile['birth_date'], "%Y-%m-%d").date()
-
-            django_gender_map = {label: value for value, label in Customer.GenderChoice.choices}
-            gender_display = user_profile.get('gender_display')
-            django_gender = django_gender_map.get(gender_display)
-
-            customer = await _create(
-                Customer,
-                gender=django_gender,
-                first_name=user_profile['first_name'],
-                second_name=user_profile['last_name'],
-                birth_date=birth_date_obj,
-                title=user_profile.get('title', ''),
-                address=address_obj
-            )
-
-            telephone_to_save = user_profile.get('telephone')
-            if not isinstance(telephone_to_save, PhoneNumber):
-                # Wenn nicht, erstelle ein Dummy-PhoneNumber-Objekt
-                # Wichtig: Die Dummy-Nummer muss gültig sein und dem PhoneNumberField-Format entsprechen.
-                try:
-                    dummy_phone = PhoneNumber.from_string("+491234567890",
-                                                          region="DE")  # Oder eine andere gültige Dummy-Nummer
-                    telephone_to_save = dummy_phone
-                except NumberParseException:
-                    # Fallback, sollte bei einer festen Dummy-Nummer nicht passieren
-                    print("FEHLER: Konnte Dummy-Telefonnummer nicht parsen.")
-                    return False
-
-
-            await _create(
-                CustomerContact,
-                customer=customer,
-                email=user_profile['email'],
-                telephone=telephone_to_save
-            )
-
-            print(f"Customer {customer.customer_id} and contact saved successfully!")
-            return True
+            # Datenbankoperationen an Service delegieren
+            return await self.customer_service.store_data_db(user_profile.copy())
 
         except Exception as e:
-            print(f"Error saving data to database: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Fehler bei der Datenvorverarbeitung: {e}")
             return False
+
+    async def _handle_error_state(self, turn_context: TurnContext, user_profile, user_input):
+        """Behandelt Fehler-Zustände und bietet Recovery-Optionen."""
+        user_input_lower = user_input.lower().strip()
+
+        retry_keywords = ["nochmal", "retry", "wieder", "erneut", "versuchen"]
+        restart_keywords = ["neustart", "restart", "von vorne", "neu beginnen"]
+
+        if any(keyword in user_input_lower for keyword in retry_keywords):
+            # Nochmal versuchen - zurück zur finalen Bestätigung
+            await turn_context.send_activity(MessageFactory.text("🔄 **Versuche es nochmal...**"))
+            await self._show_final_summary(turn_context)
+
+        elif any(keyword in user_input_lower for keyword in restart_keywords):
+            # Komplett neu starten
+            await self._handle_restart_request(turn_context)
+
+        else:
+            # Hilfe anbieten
+            error_help_message = (
+                "❌ **Ein Fehler ist aufgetreten.**\n\n"
+                "**Was möchten Sie tun?**\n"
+                "• **'Nochmal'** - erneut versuchen zu speichern\n"
+                "• **'Neustart'** - komplett von vorne beginnen\n"
+                "• **'Zurück'** - zur Zusammenfassung zurückkehren"
+            )
+            await turn_context.send_activity(MessageFactory.text(error_help_message))
+
+    # === HILFS-METHODEN FÜR BESSERE UX ===
+
+    async def _show_correction_help(self, turn_context: TurnContext):
+        """Zeigt erweiterte Hilfe für das Korrektur-System."""
+        help_message = (
+            "ℹ️ **Hilfe zum Korrektur-System:**\n\n"
+            "**Eingabe-Möglichkeiten:**\n"
+            "• **Nummer eingeben:** '6' für E-Mail korrigieren\n"
+            "• **Feldname eingeben:** 'email' oder 'e-mail'\n"
+            "• **Teilbegriff:** 'telefon', 'adresse', 'name'\n\n"
+            "**Navigation:**\n"
+            "• **'Zurück'** - zur Zusammenfassung\n"
+            "• **'Neustart'** - alles von vorne\n"
+            "• **'Hilfe'** - diese Hilfe anzeigen\n\n"
+            "**Was möchten Sie korrigieren?**"
+        )
+        await turn_context.send_activity(MessageFactory.text(help_message))
+
+    async def _validate_correction_context(self, turn_context: TurnContext, user_profile, target_field):
+        """Validiert ob ein Feld korrigiert werden kann und gibt entsprechende Meldungen."""
+        current_value = user_profile.get(target_field)
+
+        if not current_value:
+            missing_message = (
+                f"⚠️ **Feld '{target_field}' ist noch nicht ausgefüllt.**\n\n"
+                f"Sie können es jetzt eingeben:"
+            )
+            await turn_context.send_activity(MessageFactory.text(missing_message))
+            return True
+
+        # Zeige aktuellen Wert
+        display_fields = {
+            'gender': 'gender_display',
+            'title': 'title_display',
+            'birth_date': 'birth_date_display',
+            'telephone': 'telephone_display',
+            'house_number_addition': 'house_addition_display'
+        }
+
+        display_field = display_fields.get(target_field, target_field)
+        current_display = user_profile.get(display_field, current_value)
+
+        current_value_message = (
+            f"**Aktueller Wert:** {current_display}\n\n"
+            f"Bitte geben Sie den neuen Wert ein:"
+        )
+        await turn_context.send_activity(MessageFactory.text(current_value_message))
+        return True

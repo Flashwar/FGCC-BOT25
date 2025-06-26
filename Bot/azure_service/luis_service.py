@@ -7,10 +7,8 @@ from typing import Dict, Any, List
 class AzureCLUService:
 
     def __init__(self, keyvault_service=None):
-        """
-        Initializes the Azure CLU (Conversational Language Understanding) Service
-        with configuration values from Azure Key Vault.
-        """
+        # Initializes the Azure CLU (Conversational Language Understanding) Service
+
         if not keyvault_service:
             raise ValueError("KeyVault Service muss übergeben werden")
 
@@ -22,16 +20,15 @@ class AzureCLUService:
 
         # Ensure all required values are present
         if not all([self.prediction_key, self.project_name, self.deployment_name, self.prediction_endpoint]):
-            raise ValueError("CLU secrets not fully found in KeyVault")
+            raise ValueError("Nicht alle CLU-Secrets konnten im KeyVault gefunden werden")
 
-        print(f"CLU Service initialisiert - Project: {self.project_name}")
+        print(f"CLU Service initialisiert - Projekt: {self.project_name}")
 
     async def analyze_conversation(self, text: str, conversation_id: str = None,
-                                   participant_id: str = "user") -> Dict[str, Any]:
-        """
-        Sends a user input message to Azure CLU for intent and entity analysis.
-        Returns: Parsed CLU response with intent and entity data.
-        """
+                                   participant_id: str = "user"):
+        #  Sends a user input message to Azure CLU for intent and entity analysis
+        # Returns: Parsed CLU response with intent and entity data
+
         try:
             url = f"{self.prediction_endpoint}/language/:analyze-conversations"
 
@@ -47,7 +44,7 @@ class AzureCLUService:
                 "analysisInput": {
                     "conversationItem": {
                         "participantId": participant_id,
-                        "id": f"turn-{hash(text) % 10000}",  # Unique turn ID
+                        "id": f"turn-{hash(text) % 10000}",
                         "modality": "text",
                         "language": "de",
                         "text": text
@@ -82,14 +79,12 @@ class AzureCLUService:
                         return self.get_default_response(text)
 
         except Exception as e:
-            print(f"❌ CLU service exception: {e}")
-            return self.get_default_response(text)
+            print(f"❌ CLU service Error: {e}")
+            return self._create_error_response(text)
 
-    def parse_clu_response(self, clu_result: Dict, original_text: str) -> Dict[str, Any]:
-        """
-        Parses the raw CLU response and extracts intents and entities.
-        Returns: Cleaned and structured CLU result.
-        """
+    def parse_clu_response(self, clu_result: Dict, original_text: str):
+        # Parses the raw CLU response and extracts intents and entities
+
         try:
             prediction = clu_result.get("result", {}).get("prediction", {})
 
@@ -146,15 +141,9 @@ class AzureCLUService:
             print(f"❌ CLU Parse Error: {e}")
             return self._create_error_response(original_text)
 
-    def get_default_response(self, text: str) -> Dict[str, Any]:
-        """Alias für _create_error_response für Kompatibilität"""
-        return self._create_error_response(text)
+    def _create_error_response(self, text: str):
+        # Returns a standardized error response if CLU processing fails
 
-    def _create_error_response(self, text: str) -> Dict[str, Any]:
-        """
-        Returns a standardized error response if CLU processing fails.
-        Returns: A fallback response indicating failure.
-        """
         return {
             "top_intent": "None",
             "top_confidence": 0.0,
