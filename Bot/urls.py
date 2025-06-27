@@ -1,6 +1,7 @@
 from django.urls import path
 
-from .views import SuperuserLoginView, admin_dashboard, customer_stats, customer_stats_pdf, messages, webchat
+from .views import SuperuserLoginView, admin_dashboard, customer_stats, customer_stats_pdf, messages, webchat, \
+    get_directline_token
 
 urlpatterns = [
 
@@ -19,7 +20,12 @@ urlpatterns = [
     # webchat Endpoint with the corresponding function
     path('webchat/', webchat, name='webchat'),
 
+    # API WebChat Token Endpoint
+    path('api/webchat/token/', get_directline_token, name='webchat_token'),
+
     # bot Endpoint
     path('api/messages/', messages, name='bot_messages'),
+
+
 
 ]

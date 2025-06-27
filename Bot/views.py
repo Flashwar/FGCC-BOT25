@@ -3,6 +3,7 @@ import io
 import json
 import asyncio
 import traceback
+import requests
 
 from allauth.account.views import LoginView
 from django.contrib import messages
@@ -23,11 +24,11 @@ from Bot.website.tables import CustomerTable
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, ConversationState, UserState, \
-    MemoryStorage
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
 from botbuilder.schema import Activity
 from .BotFactory import create_bot_instances
-from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD, BOT_FRAMEWORK_BOT_ID, BOT_FRAMEWORK_SECRET
+from FCCSemesterAufgabe.settings import APP_ID, APP_PASSWORD, BOT_FRAMEWORK_BOT_ID, \
+    DIRECT_LINE_SECRET
 
 # BotFramework Adapter Setup
 try:
@@ -71,6 +72,7 @@ CHANNEL_BOT_MAPPING = {
         "supports": ["text"]
     }
 }
+
 
 # checks if the user is a admin
 def superuser_required(view_func):
@@ -230,9 +232,22 @@ def customer_stats_pdf(request, chart_type: str, statistics: Statistics, custome
 def webchat(request):
     # render webchat site
     return render(request, 'webchat.html', context={
-        'bot_id': BOT_FRAMEWORK_BOT_ID,
-        'bot_secret': BOT_FRAMEWORK_SECRET
+        'bot_name': BOT_FRAMEWORK_BOT_ID,
     })
+
+
+def get_directline_token(request):
+    url = "https://directline.botframework.com/v3/directline/tokens/generate"
+    headers = {
+        "Authorization": f"Bearer {DIRECT_LINE_SECRET}"
+    }
+
+    response = requests.post(url, headers=headers)
+    if response.status_code == 200:
+        return JsonResponse(response.json())
+    else:
+        return JsonResponse({"error": "Token konnte nicht generiert werden"}, status=500)
+
 
 @csrf_exempt
 @require_http_methods(["POST"])

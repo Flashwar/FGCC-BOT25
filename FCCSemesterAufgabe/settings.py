@@ -139,6 +139,7 @@ if isDocker:
     APP_PASSWORD = os.getenv('BOT_PASSWORD')
     BOT_FRAMEWORK_BOT_ID = os.getenv('BOT_FRAMEWORK_BOT_ID')
     BOT_FRAMEWORK_SECRET = os.getenv('BOT_FRAMEWORK_SECRET')
+    DIRECT_LINE_SECRET= os.getenv('DIRECT_LINE_SECRET')
 else:
     Name = AZURE_KEYVAULT.get_secret_from_keyvault("DB-NAME")
     User = AZURE_KEYVAULT.get_secret_from_keyvault('DB-USER')
@@ -149,6 +150,8 @@ else:
     APP_PASSWORD = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-PASSWORT')
     BOT_FRAMEWORK_BOT_ID = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-FRAMEWORK-BOT-ID')
     BOT_FRAMEWORK_SECRET = AZURE_KEYVAULT.get_secret_from_keyvault('BOT-FRAMEWORK-SECRET')
+    DIRECT_LINE_SECRET= AZURE_KEYVAULT.get_secret_from_keyvault('DIRECT-LINE-SECRET')
+
 
 DATABASES = {
     'default': {

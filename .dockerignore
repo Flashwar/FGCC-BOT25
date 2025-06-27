@@ -90,9 +90,5 @@ tests/fixtures/
 Terraform/
 
 # other stuff
-uebungen/
-Unbenanntes Diagramm.drawio
-Unbenanntes Diagramm.jpg
-myapp_models.png
-erd.png
+docs/
 .github/

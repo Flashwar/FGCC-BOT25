@@ -9,7 +9,6 @@ from botbuilder.schema import ChannelAccount
 from .validators import DataValidator
 from .services import CustomerService
 
-
 class DialogState:
     """Defines the possible states within the conversation flow"""
     GREETING = "greeting"
@@ -95,6 +94,19 @@ class RegistrationTextBot(ActivityHandler):
         user_input = turn_context.activity.text.strip()
         user_input_lower = user_input.lower()
 
+        # Auto-start registration for first-time users
+        if not user_profile and dialog_state == DialogState.GREETING:
+            # Mark as first interaction and show welcome
+            user_profile['first_interaction'] = True
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            await self._handle_greeting(turn_context, user_profile)
+
+            # Save state and return early
+            await self.conversation_state.save_changes(turn_context)
+            await self.user_state.save_changes(turn_context)
+            return
+
         # Special handling for the COMPLETED state, where the registration is finished
         if dialog_state == DialogState.COMPLETED:
             await self._handle_completed_state(turn_context, user_profile, user_input)
@@ -115,7 +127,6 @@ class RegistrationTextBot(ActivityHandler):
         # save the state after each iteration
         await self.conversation_state.save_changes(turn_context)
         await self.user_state.save_changes(turn_context)
-
 
 
     async def _start_correction_process(self, turn_context: TurnContext, user_profile):
@@ -405,6 +416,22 @@ class RegistrationTextBot(ActivityHandler):
             # Reset state to COMPLETED, but do NOT automatically start a new registration
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
 
+    async def on_members_added_activity(self, members_added: [ChannelAccount], turn_context: TurnContext):
+        """Called when members are added to the conversation."""
+        for member in members_added:
+            if member.id != turn_context.activity.recipient.id:
+                # Initialize dialog state and start registration
+                await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
+                await self._handle_greeting(turn_context,
+                                            await self.user_profile_accessor.get(turn_context, lambda: {}))
+
+                break  # Only greet once, even if multiple members are added
+
+        # Save state after each round
+        await self.conversation_state.save_changes(turn_context)
+        await self.user_state.save_changes(turn_context)
+
+
     async def _handle_greeting(self, turn_context: TurnContext, user_profile, *args):
         # Starts the registration dialogue with a welcome message and explanation of the process
         welcome_message = (
@@ -420,6 +447,7 @@ class RegistrationTextBot(ActivityHandler):
             "Antworten Sie mit **'Ja'** um fortzufahren\n"
             "Antworten Sie mit **'Nein'** um abzubrechen"
         )
+
         await turn_context.send_activity(MessageFactory.text(welcome_message))
         # Transition to the next state
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CONSENT)
