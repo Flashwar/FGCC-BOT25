@@ -16,6 +16,9 @@ class BotMessages:
         "Antworten Sie mit **'Nein'** um abzubrechen"
     )
 
+    
+
+
     CONSENT_GRANTED = (
         "**Vielen Dank für Ihr Einverständnis!**\n\n"
         "Die Registrierung beginnt jetzt. Lassen Sie uns mit Ihrem Geschlecht beginnen."
