@@ -99,6 +99,7 @@ RUN apt-get update \
         libgtk-3-0 \
         unixodbc \
         unixodbc-dev \
+        ffmpeg \
     # Add Microsoft repository and install ODBC driver
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
