@@ -813,6 +813,17 @@ class RegistrationAudioBot(ActivityHandler):
 
         await self._save_state(turn_context)
 
+    async def _download_audio(self, attachment: Attachment) -> bytes:
+        """Lädt Audio herunter"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(attachment.content_url) as response:
+                    if response.status == 200:
+                        return await response.read()
+        except Exception as e:
+            print(f"❌ Download Fehler: {e}")
+        return None
+
     # === INPUT VALIDATION UND EXTRAKTION ===
 
     async def _extract_and_validate_input(self, turn_context: TurnContext) -> str:
