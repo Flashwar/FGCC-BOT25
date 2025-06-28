@@ -17,7 +17,7 @@ def create_bot_instances():
         customer_service = CustomerService()
 
         # Instantiate bots
-        tele_bot = AudioBot(conversation_state, user_state)
+        tele_bot = AudioBot(conversation_state, user_state, customer_service)
         web_bot = RegistrationTextBot(conversation_state, user_state, customer_service)
 
 

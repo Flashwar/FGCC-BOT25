@@ -6,6 +6,7 @@ from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 from phonenumbers import NumberParseException, parse, is_valid_number
 from asgiref.sync import sync_to_async
+from injector import inject
 from Bot.message_bot import DialogState
 
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, ConversationState, UserState
@@ -13,6 +14,7 @@ from botbuilder.schema import ChannelAccount, Attachment, ActivityTypes
 from Bot.azure_service.luis_service import  AzureCLUService
 from Bot.azure_service.speech_service import AzureSpeechService
 from Bot.models import Customer, AddressCountry, AddressStreet, AddressCity, Address, CustomerContact
+
 
 print("=== VEREINFACHTER AUDIO BOT WIRD GELADEN ===")
 
@@ -644,9 +646,10 @@ from .azure_service.speech_service import AzureSpeechService
 print("=== EINFACHER AUDIO BOT ===")
 
 
-class SimpleAudioBot(ActivityHandler):
+class AudioBot(ActivityHandler):
     """Vereinfachter Audio-Bot für Registrierung"""
 
+    @inject
     def __init__(self, conversation_state: ConversationState, user_state: UserState, customer_service: CustomerService):
         super().__init__()
         print("🎤 Starte einfachen Audio Bot...")
@@ -660,15 +663,33 @@ class SimpleAudioBot(ActivityHandler):
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
         self.dialog_state_accessor = self.conversation_state.create_property("DialogState")
 
-        # Azure Speech Service
-        try:
-            self.speech_service = AzureSpeechService()
-            print("✅ Speech Service bereit")
-        except Exception as e:
-            print(f"⚠️ Kein Speech Service: {e}")
-            self.speech_service = None
+        # Azure Speech Service mit verbesserter Initialisierung
+        self.speech_service = self._init_speech_service()
 
         print("✅ Audio Bot bereit")
+
+    def _init_speech_service(self):
+        """Initialisiert Speech Service mit verbesserter Fehlerbehandlung"""
+        try:
+            print("🎵 Initialisiere Speech Service...")
+            speech_service = AzureSpeechService()
+
+            # Test TTS
+            print("🎵 Teste TTS...")
+            test_audio = speech_service.text_to_speech_bytes("Test")
+
+            if test_audio and len(test_audio) > 0:
+                print(f"✅ Speech Service funktioniert! TTS Test: {len(test_audio)} bytes")
+                return speech_service
+            else:
+                print("❌ TTS Test fehlgeschlagen - kein Audio generiert")
+                return None
+
+        except Exception as e:
+            print(f"❌ Speech Service Initialisierung fehlgeschlagen: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     # === MAIN METHODS ===
 
@@ -718,25 +739,42 @@ class SimpleAudioBot(ActivityHandler):
             return None
 
         # Audio herunterladen
+        print("📥 Lade Audio herunter...")
         audio_bytes = await self._download_audio(audio_files[0])
         if not audio_bytes:
             await self._speak(turn_context, "Audio konnte nicht geladen werden.")
             return None
 
+        print(f"📥 Audio geladen: {len(audio_bytes)} bytes")
+
         # Speech-to-Text
         if self.speech_service:
-            result = self.speech_service.speech_to_text_from_bytes(audio_bytes)
-            if result.get('success'):
-                text = result.get('text', '').strip()
-                print(f"🗣️ Verstanden: '{text}'")
-                return text
-            else:
-                await self._speak(turn_context, "Ich konnte Sie nicht verstehen. Bitte sprechen Sie deutlicher.")
+            try:
+                print("🎤 Starte STT...")
+                result = self.speech_service.speech_to_text_from_bytes(audio_bytes)
+                print(f"🎤 STT Result: {result}")
+
+                if result.get('success'):
+                    text = result.get('text', '').strip()
+                    print(f"🗣️ Verstanden: '{text}'")
+                    return text
+                else:
+                    error_msg = result.get('error', 'Unbekannter Fehler')
+                    print(f"❌ STT Fehler: {error_msg}")
+                    await self._speak(turn_context, "Ich konnte Sie nicht verstehen. Bitte sprechen Sie deutlicher.")
+                    return None
+
+            except Exception as e:
+                print(f"❌ STT Exception: {e}")
+                import traceback
+                traceback.print_exc()
+                await self._speak(turn_context, "Fehler beim Verarbeiten der Sprache.")
                 return None
         else:
             # Mock für Tests
-            mock_text = self._get_mock_input(await self.dialog_state_accessor.get(turn_context, lambda: "start"))
-            print(f"🧪 Mock Input: '{mock_text}'")
+            current_state = await self.dialog_state_accessor.get(turn_context, lambda: "start")
+            mock_text = self._get_mock_input(current_state)
+            print(f"🧪 Mock Input für State '{current_state}': '{mock_text}'")
             return mock_text
 
     async def _speak(self, turn_context: TurnContext, text: str):
@@ -744,21 +782,41 @@ class SimpleAudioBot(ActivityHandler):
         print(f"🔊 Sage: '{text}'")
 
         if self.speech_service:
-            audio_bytes = self.speech_service.text_to_speech_bytes(text)
-            if audio_bytes:
-                # Audio als Base64 senden
-                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                attachment = Attachment(
-                    content_type="audio/wav",
-                    content_url=f"data:audio/wav;base64,{audio_base64}",
-                    name="response.wav"
-                )
-                reply = MessageFactory.attachment(attachment)
-                reply.text = f"🔊 {text}"
-                await turn_context.send_activity(reply)
-                return
+            try:
+                print("🎵 Generiere TTS Audio...")
+                audio_bytes = self.speech_service.text_to_speech_bytes(text)
 
-        # Fallback: Text senden
+                if audio_bytes and len(audio_bytes) > 0:
+                    print(f"✅ Audio generiert: {len(audio_bytes)} bytes")
+
+                    # Audio als Base64 kodieren
+                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                    print(f"✅ Base64 kodiert: {len(audio_base64)} Zeichen")
+
+                    # Attachment erstellen (wie in Ihrem funktionierenden Beispiel)
+                    attachment = Attachment(
+                        content_type="audio/wav",
+                        content_url=f"data:audio/wav;base64,{audio_base64}",
+                        name="bot_response.wav"
+                    )
+
+                    # Nachricht mit Audio-Attachment senden
+                    reply = MessageFactory.attachment(attachment)
+                    reply.text = f"🔊 {text}"  # Text als Fallback
+
+                    await turn_context.send_activity(reply)
+                    print("✅ Audio-Nachricht gesendet")
+                    return
+                else:
+                    print("❌ TTS Audio ist leer oder None")
+
+            except Exception as e:
+                print(f"❌ TTS Fehler: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Fallback: Nur Text senden
+        print("🔊 Fallback: Sende nur Text")
         await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
 
     async def _download_audio(self, attachment: Attachment) -> bytes:
