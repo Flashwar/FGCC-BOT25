@@ -643,6 +643,7 @@ from .validators import DataValidator
 from .services import CustomerService
 from .text_messages import BotMessages, FieldConfig
 from .azure_service.speech_service import AzureSpeechService
+from FCCSemesterAufgabe.settings import isDocker
 
 print("=== AUDIO REGISTRATION BOT WIRD GELADEN ===")
 
@@ -668,8 +669,21 @@ class RegistrationAudioBot(ActivityHandler):
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
         self.dialog_state_accessor = self.conversation_state.create_property("DialogState")
 
-        # Audio Services
-        self.speech_service = self._initialize_speech_service()
+        if isDocker:
+            print("⚠️ KeyVault Service nicht verfügbar")
+            self.clu_service = None
+            self.speech_service = None
+        else:
+            #self.clu_service = AzureCLUService()
+            self.speech_service = AzureSpeechService()
+
+            test_audio = self.speech_service.text_to_speech_bytes("Test")
+
+            if test_audio and len(test_audio) > 0:
+                print(f"✅ Speech Service funktioniert! TTS Test: {len(test_audio)} bytes")
+
+            print("✅ Azure Services erfolgreich initialisiert")
+
         self.supported_audio_types = {
             'audio/ogg', 'audio/mpeg', 'audio/wav', 'audio/webm', 'audio/mp3', 'audio/x-wav', 'audio/wave'
         }
