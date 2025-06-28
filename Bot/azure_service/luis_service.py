@@ -2,21 +2,19 @@ import aiohttp
 import json
 import os
 from typing import Dict, Any, List
-
+from FCCSemesterAufgabe.settings import AZURE_KEYVAULT
 
 class AzureCLUService:
 
-    def __init__(self, keyvault_service=None):
+    def __init__(self):
         # Initializes the Azure CLU (Conversational Language Understanding) Service
 
-        if not keyvault_service:
-            raise ValueError("KeyVault Service muss übergeben werden")
 
         # Retrieve all required secrets from Azure Key Vault
-        self.prediction_key = keyvault_service.get_secret_from_keyvault("CLU-KEY")
-        self.project_name = keyvault_service.get_secret_from_keyvault("CLU-PROJECT-NAME")
-        self.deployment_name = keyvault_service.get_secret_from_keyvault("CLU-DEPLOYMENT-NAME")
-        self.prediction_endpoint = keyvault_service.get_secret_from_keyvault("CLU-ENDPOINT")
+        self.prediction_key = AZURE_KEYVAULT.get_secret_from_keyvault("CLU-KEY")
+        self.project_name = AZURE_KEYVAULT.get_secret_from_keyvault("CLU-PROJECT-NAME")
+        self.deployment_name = AZURE_KEYVAULT.get_secret_from_keyvault("CLU-DEPLOYMENT-NAME")
+        self.prediction_endpoint = AZURE_KEYVAULT.get_secret_from_keyvault("CLU-ENDPOINT")
 
         # Ensure all required values are present
         if not all([self.prediction_key, self.project_name, self.deployment_name, self.prediction_endpoint]):
@@ -88,6 +86,8 @@ class AzureCLUService:
         try:
             prediction = clu_result.get("result", {}).get("prediction", {})
 
+
+
             # Extract all intents with their confidence scores
             intents_list = prediction.get("intents", [])
             all_intents = []
@@ -101,6 +101,9 @@ class AzureCLUService:
                     "recognized_text": original_text,
                     "text_length": len(original_text)
                 })
+
+            # Get Top Ident
+            top_intent = all_intents[0] if all_intents else {"intent": "None", "confidence": 0.0}
 
             # Sort intents by confidence descending
             all_intents.sort(key=lambda x: x["confidence"], reverse=True)
@@ -129,6 +132,8 @@ class AzureCLUService:
                     }
 
             return {
+                "top_intent": top_intent["intent"],
+                "top_confidence": top_intent["confidence"],
                 "all_intents": all_intents,
                 "entities": entities,
                 "original_text": original_text,

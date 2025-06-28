@@ -114,19 +114,25 @@ class RegistrationAudioBot(ActivityHandler):
         print("=" * 50)
 
         try:
-            # 1. Input-Typ validieren und extrahieren
+            # 1. Prüfe auf /start Kommando (vor Audio-Validierung!)
+            text_input = turn_context.activity.text
+            if text_input and text_input.strip().lower() == '/start':
+                await self._handle_start_command(turn_context)
+                return
+
+            # 2. Input-Typ validieren und extrahieren
             user_input = await self._extract_and_validate_input(turn_context)
             if user_input is None:  # Fehler beim Input oder ungültiger Typ
                 return
 
-            # 2. User Profile und Dialog State abrufen (identisch zum Text-Bot)
+            # 3. User Profile und Dialog State abrufen (identisch zum Text-Bot)
             user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
             dialog_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
 
             print(f"🎯 Current State: {dialog_state}")
             print(f"🗣️ User Input: '{user_input}'")
 
-            # 3. Auto-start für neue User (identisch zum Text-Bot)
+            # 4. Auto-start für neue User (identisch zum Text-Bot)
             if not user_profile and dialog_state == DialogState.GREETING:
                 user_profile['first_interaction'] = True
                 await self.user_profile_accessor.set(turn_context, user_profile)
@@ -134,9 +140,11 @@ class RegistrationAudioBot(ActivityHandler):
                 await self._save_state(turn_context)
                 return
 
-            # 4. Dialog-Routing (identische Logik wie Text-Bot)
+            # 5. Dialog-Routing (identische Logik wie Text-Bot)
             if dialog_state == DialogState.COMPLETED:
                 await self._handle_completed_state(turn_context, user_profile, user_input)
+            elif dialog_state == "restart_confirmation":
+                await self._handle_restart_confirmation(turn_context, user_profile, user_input)
             elif dialog_state == "correction_selection":
                 await self._handle_correction_selection(turn_context, user_profile, user_input)
             elif dialog_state.startswith(DialogState.CONFIRM_PREFIX):
@@ -146,7 +154,7 @@ class RegistrationAudioBot(ActivityHandler):
             else:
                 await self._handle_unknown_state(turn_context, user_profile, user_input)
 
-            # 5. State speichern (identisch zum Text-Bot)
+            # 6. State speichern (identisch zum Text-Bot)
             await self._save_state(turn_context)
 
         except Exception as e:
@@ -164,6 +172,133 @@ class RegistrationAudioBot(ActivityHandler):
                 break
 
         await self._save_state(turn_context)
+
+    async def _handle_start_command(self, turn_context: TurnContext):
+        """
+        Behandelt /start Kommando.
+        - Wenn in Registrierung: Bestätigung erfragen
+        - Wenn bereits fertig/nicht gestartet: Direkt neu starten
+        """
+        print("🔄 /start Kommando erkannt")
+
+        user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
+        dialog_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
+
+        # Prüfe ob User bereits in aktiver Registrierung ist
+        is_in_registration = self._is_in_active_registration(dialog_state, user_profile)
+
+        if is_in_registration:
+            # User ist mitten in der Registrierung - Bestätigung erfragen
+            print(f"🤔 User ist in aktiver Registrierung (State: {dialog_state})")
+            await self._ask_restart_confirmation(turn_context)
+        else:
+            # User ist nicht in aktiver Registrierung - direkt neu starten
+            print(f"✅ User nicht in aktiver Registrierung (State: {dialog_state}) - direkter Neustart")
+            await self._execute_restart(turn_context)
+
+        await self._save_state(turn_context)
+
+    def _is_in_active_registration(self, dialog_state: str, user_profile: dict) -> bool:
+        """
+        Prüft ob User sich in einer aktiven Registrierung befindet.
+        """
+        # States die als "aktive Registrierung" gelten
+        active_registration_states = [
+            DialogState.ASK_CONSENT,
+            DialogState.ASK_GENDER,
+            DialogState.ASK_TITLE,
+            DialogState.ASK_FIRST_NAME,
+            DialogState.ASK_LAST_NAME,
+            DialogState.ASK_BIRTHDATE,
+            DialogState.ASK_EMAIL,
+            DialogState.ASK_PHONE,
+            DialogState.ASK_STREET,
+            DialogState.ASK_HOUSE_NUMBER,
+            DialogState.ASK_HOUSE_ADDITION,
+            DialogState.ASK_POSTAL,
+            DialogState.ASK_CITY,
+            DialogState.ASK_COUNTRY,
+            DialogState.FINAL_CONFIRMATION,
+            "correction_selection",
+        ]
+
+        # Auch alle Bestätigungs-States
+        if dialog_state.startswith(DialogState.CONFIRM_PREFIX):
+            return True
+
+        # Prüfe normale Registration-States
+        if dialog_state in active_registration_states:
+            return True
+
+        # Prüfe ob User bereits Daten eingegeben hat (auch bei GREETING)
+        if dialog_state == DialogState.GREETING and user_profile:
+            # Wenn User schon mal Daten eingegeben hat, ist es eine Fortsetzung
+            has_registration_data = any(key in user_profile for key in [
+                'consent_given', 'gender', 'first_name', 'last_name',
+                'email', 'telephone', 'street_name'
+            ])
+            return has_registration_data
+
+        return False
+
+    async def _ask_restart_confirmation(self, turn_context: TurnContext):
+        """
+        Fragt User ob wirklich neu gestartet werden soll.
+        """
+        # Speichere aktuellen State um später zurückkehren zu können
+        current_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
+        user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
+        user_profile['previous_state'] = current_state
+        await self.user_profile_accessor.set(turn_context, user_profile)
+
+        confirmation_text = (
+            "Sie sind gerade mitten in der Registrierung. "
+            "Möchten Sie wirklich von vorne beginnen? "
+            "Alle bisherigen Eingaben gehen dabei verloren. "
+            "Sagen Sie 'ja' zum Neustarten oder 'nein' zum Fortfahren."
+        )
+
+        await self._send_audio_response(turn_context, confirmation_text)
+        await self.dialog_state_accessor.set(turn_context, "restart_confirmation")
+
+    async def _handle_restart_confirmation(self, turn_context: TurnContext, user_profile, user_input):
+        """
+        Behandelt die Antwort auf die Neustart-Bestätigung.
+        """
+        user_input_lower = user_input.lower().strip()
+
+        if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
+            # User möchte wirklich neu starten
+            print("✅ User bestätigt Neustart")
+            await self._send_audio_response(turn_context, "Verstanden. Ich starte die Registrierung neu.")
+            await self._execute_restart(turn_context)
+
+        elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
+            # User möchte nicht neu starten - zurück zum vorherigen State
+            print("✅ User möchte nicht neu starten - kehre zum Dialog zurück")
+            await self._send_audio_response(turn_context, "In Ordnung. Dann setzen wir fort.")
+
+            # Kehre zum vorherigen Dialog-State zurück (der vor restart_confirmation war)
+            previous_state = user_profile.get('previous_state', DialogState.GREETING)
+            await self.dialog_state_accessor.set(turn_context, previous_state)
+
+        else:
+            # Unklare Antwort
+            await self._send_audio_response(turn_context,
+                                            "Bitte antworten Sie mit 'ja' um neu zu starten oder 'nein' um fortzufahren.")
+
+    async def _execute_restart(self, turn_context: TurnContext):
+        """
+        Führt den eigentlichen Neustart durch.
+        """
+        print("🔄 Führe Neustart durch...")
+
+        # Alles zurücksetzen
+        await self.user_profile_accessor.set(turn_context, {})
+        await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
+
+        # Neue Registrierung starten
+        await self._handle_greeting(turn_context, {})
 
     # === INPUT VALIDATION UND AUDIO PROCESSING ===
 
@@ -288,12 +423,9 @@ class RegistrationAudioBot(ActivityHandler):
     # === AUDIO OUTPUT ===
 
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
-        """Einheitliche Audio-Antwort Methode"""
+        """Sendet NUR Audio-Antworten (kein Text-Display mehr)"""
         try:
             print(f"🔊 Generiere Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
-
-            # Text-Anzeige vor Audio
-            await self._send_bot_text_display(turn_context, text)
 
             # Text für Sprache optimieren
             speech_text = self._convert_markdown_to_speech(text)
@@ -309,14 +441,43 @@ class RegistrationAudioBot(ActivityHandler):
                     name="bot_response.wav"
                 )
                 reply = MessageFactory.attachment(attachment)
-                reply.text = f"🔊 Audio-Antwort"
+                # Kein Text mehr - nur Audio
                 await turn_context.send_activity(reply)
+                print("✅ Audio-Nachricht gesendet (nur Audio)")
             else:
+                # Fallback nur bei TTS-Fehler
                 await turn_context.send_activity(MessageFactory.text(f"❌ [TTS fehlgeschlagen] {text}"))
 
         except Exception as e:
             print(f"❌ TTS Fehler: {e}")
+            # Fallback nur bei Fehler
             await turn_context.send_activity(MessageFactory.text(f"❌ [Audio-Fehler] {text}"))
+
+    async def _send_recognized_text_display(self, turn_context: TurnContext, recognized_text: str):
+        """
+        Zeigt erkannten Text als Audio-Bestätigung.
+        """
+        try:
+            # Statt Text-Display: Audio-Bestätigung was verstanden wurde
+            confirmation_text = f"Ich habe verstanden: {recognized_text}"
+
+            # Kurze Audio-Bestätigung senden
+            speech_text = self._convert_markdown_to_speech(confirmation_text)
+            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+
+            if audio_bytes and len(audio_bytes) > 0:
+                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                attachment = Attachment(
+                    content_type="audio/wav",
+                    content_url=f"data:audio/wav;base64,{audio_base64}",
+                    name="recognition_confirmation.wav"
+                )
+                reply = MessageFactory.attachment(attachment)
+                await turn_context.send_activity(reply)
+                print("✅ Audio-Bestätigung der Spracherkennung gesendet")
+
+        except Exception as e:
+            print(f"❌ Fehler bei Audio-Bestätigung der Spracherkennung: {e}")
 
     def _convert_markdown_to_speech(self, text: str) -> str:
         """Konvertiert Markdown zu sprachfreundlichem Text"""
@@ -327,22 +488,6 @@ class RegistrationAudioBot(ActivityHandler):
         speech_text = re.sub(r'\s+', ' ', speech_text)  # Mehrfache Leerzeichen entfernen
         return speech_text.strip()
 
-    async def _send_recognized_text_display(self, turn_context: TurnContext, recognized_text: str):
-        """Zeigt erkannten Text an"""
-        try:
-            display_message = f"📝 Verstanden: \"{recognized_text}\""
-            await turn_context.send_activity(MessageFactory.text(display_message))
-        except Exception as e:
-            print(f"❌ Fehler beim Senden des erkannten Texts: {e}")
-
-    async def _send_bot_text_display(self, turn_context: TurnContext, text: str):
-        """Zeigt Bot-Text vor Audio an"""
-        try:
-            display_text = self._convert_markdown_to_speech(text)
-            display_message = f"🤖 Bot: {display_text}"
-            await turn_context.send_activity(MessageFactory.text(display_message))
-        except Exception as e:
-            print(f"❌ Fehler beim Senden des Bot-Texts: {e}")
 
     # === DIALOG HANDLERS (Identisch zum Text-Bot, nur mit Audio-Output) ===
 
