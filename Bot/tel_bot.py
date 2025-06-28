@@ -639,14 +639,14 @@ from injector import inject
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, ConversationState, UserState
 from botbuilder.schema import ChannelAccount, Attachment
 
+from .audio_converter import FFmpegAudioConverter
 from .dialogstate import DialogState
 from .validators import DataValidator
 from .services import CustomerService
 from .text_messages import BotMessages, FieldConfig
 from .azure_service.speech_service import AzureSpeechService
 from FCCSemesterAufgabe.settings import isDocker
-from pydub import AudioSegment
-from pydub.exceptions import CouldntDecodeError
+
 
 print("=== AUDIO REGISTRATION BOT WIRD GELADEN ===")
 
@@ -667,6 +667,8 @@ class RegistrationAudioBot(ActivityHandler):
         self.customer_service = customer_service
         self.conversation_state = conversation_state
         self.user_state = user_state
+
+        self.audio_converter = FFmpegAudioConverter()
 
         # State Accessors (identisch zum Text-Bot)
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
@@ -850,24 +852,124 @@ class RegistrationAudioBot(ActivityHandler):
         except Exception as e:
             print(f"❌ Audio Download Fehler: {e}")
 
-    async def _validate_and_convert_audio(self, audio_bytes: bytes, content_type: str) -> bytes:
+    async def _validate_and_convert_audio(self, audio_bytes: bytes, content_type: str) -> Optional[bytes]:
         """
-        Validiert und konvertiert Audio zu Azure-kompatiblem Format.
+        Validiert und konvertiert Audio mit FFmpeg
         """
         try:
-            print(f"🔧 Validiere Audio-Format: {content_type}")
+            print(f"🔧 Audio-Validierung: {content_type}, {len(audio_bytes)} bytes")
 
             # 1. Prüfe ob bereits Azure-kompatibel
             if content_type in self.azure_compatible_formats:
-                print("✅ Audio-Format bereits kompatibel")
-                return self._validate_wav_header(audio_bytes)
+                print("✅ Audio-Format bereits Azure-kompatibel")
+                validated_audio = self._validate_wav_header(audio_bytes)
+                if validated_audio:
+                    return validated_audio
+                else:
+                    print("⚠️ WAV-Header defekt, versuche Reparatur mit FFmpeg...")
 
-            # 2. Konvertiere zu WAV
-            print(f"🔄 Konvertiere {content_type} zu WAV...")
-            return await self._convert_to_wav(audio_bytes, content_type)
+            # 2. Audio-Info extrahieren (für Debugging)
+            if self.audio_converter.ffmpeg_available:
+                audio_info = self.audio_converter.get_audio_info(audio_bytes)
+                print(f"🎵 Audio Info: {audio_info}")
+
+                # Prüfe Audio-Eigenschaften
+                duration = audio_info.get('duration', 0)
+                if duration > 60:  # Länger als 60 Sekunden
+                    print(f"⚠️ Audio sehr lang: {duration:.1f}s - könnte STT-Probleme verursachen")
+                elif duration < 0.5:  # Kürzer als 0.5 Sekunden
+                    print(f"⚠️ Audio sehr kurz: {duration:.1f}s - könnte STT-Probleme verursachen")
+
+            # 3. Konvertierung mit FFmpeg
+            if self.audio_converter.ffmpeg_available:
+                print(f"🔄 Konvertiere {content_type} zu Azure-WAV...")
+                return await self.audio_converter.convert_to_azure_wav(audio_bytes)
+            else:
+                print(f"❌ FFmpeg nicht verfügbar - {content_type} wird nicht unterstützt")
+                return None
 
         except Exception as e:
             print(f"❌ Audio-Validierung fehlgeschlagen: {e}")
+            return None
+
+    def _validate_wav_header(self, audio_bytes: bytes) -> Optional[bytes]:
+        """
+        Basis WAV-Header Validierung
+        """
+        try:
+            if len(audio_bytes) < 44:
+                print("❌ Audio zu kurz für WAV-Header")
+                return None
+
+            if audio_bytes[:4] != b'RIFF':
+                print("❌ Kein RIFF-Header")
+                return None
+
+            if audio_bytes[8:12] != b'WAVE':
+                print("❌ Kein WAVE-Header")
+                return None
+
+            # Zusätzliche WAV-Validierung
+            fmt_chunk = audio_bytes[12:16]
+            if fmt_chunk != b'fmt ':
+                print("❌ Kein fmt-Chunk gefunden")
+                return None
+
+            print("✅ WAV-Header validiert")
+            return audio_bytes
+
+        except Exception as e:
+            print(f"❌ WAV-Header Validierung fehlgeschlagen: {e}")
+            return None
+
+    async def _process_audio_input(self, turn_context: TurnContext, attachment: Attachment) -> Optional[str]:
+        """
+        Überarbeitete Audio-Verarbeitung mit FFmpeg
+        """
+        try:
+            # Audio herunterladen
+            print("📥 Lade Audio herunter...")
+            audio_bytes = await self._download_audio(attachment)
+            if not audio_bytes:
+                await self._send_audio_response(turn_context, "Audio konnte nicht geladen werden.")
+                return None
+
+            print(f"📥 Audio geladen: {len(audio_bytes)} bytes, Format: {attachment.content_type}")
+
+            # Audio validieren und konvertieren
+            processed_audio = await self._validate_and_convert_audio(audio_bytes, attachment.content_type)
+            if not processed_audio:
+                await self._send_audio_response(turn_context,
+                                                "Das Audio-Format konnte nicht verarbeitet werden. Bitte versuchen Sie eine andere Aufnahme.")
+                return None
+
+            # Speech-to-Text
+            if not self.speech_service:
+                print("❌ Kein Speech Service verfügbar")
+                await self._send_audio_response(turn_context,
+                                                "Der Sprach-Service ist nicht verfügbar.")
+                return None
+
+            print("🎤 Starte STT mit FFmpeg-verarbeitetem Audio...")
+            stt_result = self.speech_service.speech_to_text_from_bytes(processed_audio)
+            print(f"🎤 STT Result: {stt_result}")
+
+            if stt_result.get('success'):
+                recognized_text = stt_result.get('text', '').strip()
+                print(f"🗣️ STT Erkannt: '{recognized_text}'")
+
+                # Text anzeigen
+                await self._send_recognized_text_display(turn_context, recognized_text)
+                return recognized_text
+            else:
+                error_msg = stt_result.get('error', 'Unbekannter STT-Fehler')
+                print(f"❌ STT Fehler: {error_msg}")
+                await self._handle_stt_error(turn_context, error_msg)
+                return None
+
+        except Exception as e:
+            print(f"❌ Fehler bei Audio-Verarbeitung: {e}")
+            await self._send_audio_response(turn_context, "Fehler beim Verarbeiten der Sprache.")
             return None
 
     def _validate_wav_header(self, audio_bytes: bytes) -> bytes:
@@ -895,51 +997,6 @@ class RegistrationAudioBot(ActivityHandler):
 
         except Exception as e:
             print(f"❌ WAV-Header Validierung fehlgeschlagen: {e}")
-            return None
-
-    async def _convert_to_wav(self, audio_bytes: bytes, content_type: str) -> bytes:
-        """
-        Konvertiert Audio zu WAV-Format mit pydub.
-        """
-        try:
-            # Audio-Format aus content_type ableiten
-            format_map = {
-                'audio/mpeg': 'mp3',
-                'audio/mp3': 'mp3',
-                'audio/ogg': 'ogg',
-                'audio/webm': 'webm',
-                'audio/opus': 'opus',
-                'audio/aac': 'aac',
-                'audio/m4a': 'm4a'
-            }
-
-            source_format = format_map.get(content_type, 'mp3')  # Default zu mp3
-            print(f"🔄 Konvertiere von {source_format} zu WAV...")
-
-            # Audio mit pydub laden
-            audio_segment = AudioSegment.from_file(
-                io.BytesIO(audio_bytes),
-                format=source_format
-            )
-
-            # Zu WAV konvertieren mit Azure-optimierten Einstellungen
-            wav_audio = audio_segment.set_frame_rate(16000)  # 16kHz für Speech Service
-            wav_audio = wav_audio.set_channels(1)  # Mono
-            wav_audio = wav_audio.set_sample_width(2)  # 16-bit
-
-            # Als WAV-Bytes exportieren
-            wav_buffer = io.BytesIO()
-            wav_audio.export(wav_buffer, format="wav")
-            wav_bytes = wav_buffer.getvalue()
-
-            print(f"✅ Audio konvertiert: {len(audio_bytes)} -> {len(wav_bytes)} bytes")
-            return wav_bytes
-
-        except CouldntDecodeError as e:
-            print(f"❌ Audio-Dekodierung fehlgeschlagen: {e}")
-            return None
-        except Exception as e:
-            print(f"❌ Audio-Konvertierung fehlgeschlagen: {e}")
             return None
 
     # === INPUT VALIDATION UND EXTRAKTION ===
@@ -970,61 +1027,6 @@ class RegistrationAudioBot(ActivityHandler):
 
         # Fall 3: Audio-Input verarbeiten
         return await self._process_audio_input(turn_context, audio_attachments[0])
-
-    async def _process_audio_input(self, turn_context: TurnContext, attachment: Attachment) -> str:
-        """Verbesserte Audio-Verarbeitung mit Format-Konvertierung"""
-        try:
-            # Audio herunterladen
-            print("📥 Lade Audio herunter...")
-            audio_bytes = await self._download_audio(attachment)
-            if not audio_bytes:
-                await self._send_audio_response(turn_context, "Audio konnte nicht geladen werden.")
-                return None
-
-            print(f"📥 Audio geladen: {len(audio_bytes)} bytes, Format: {attachment.content_type}")
-
-            # Audio-Format validieren und konvertieren
-            processed_audio = await self._validate_and_convert_audio(audio_bytes, attachment.content_type)
-            if not processed_audio:
-                await self._send_audio_response(turn_context,
-                                                "Das Audio-Format wird nicht unterstützt. Bitte verwenden Sie WAV, MP3 oder OGG.")
-                return None
-
-            # Speech-to-Text mit verarbeitetem Audio
-            if not self.speech_service:
-                print("❌ KRITISCHER FEHLER: Kein Speech Service verfügbar")
-                await self._send_audio_response(turn_context,
-                                                "Entschuldigung, der Sprach-Service ist nicht verfügbar.")
-                return None
-
-            print("🎤 Starte STT mit verarbeitetem Audio...")
-            stt_result = self.speech_service.speech_to_text_from_bytes(processed_audio)
-            print(f"🎤 STT Result: {stt_result}")
-
-            if stt_result.get('success'):
-                recognized_text = stt_result.get('text', '').strip()
-                print(f"🗣️ STT Erkannt: '{recognized_text}'")
-
-                # Text anzeigen
-                await self._send_recognized_text_display(turn_context, recognized_text)
-                return recognized_text
-            else:
-                error_msg = stt_result.get('error', 'Unbekannter STT-Fehler')
-                print(f"❌ STT Fehler: {error_msg}")
-
-                # Spezifische Fehlerbehandlung
-                if "INVALID_HEADER" in error_msg or "0xa" in error_msg:
-                    await self._send_audio_response(turn_context,
-                                                    "Das Audio-Format konnte nicht verarbeitet werden. Bitte versuchen Sie es mit einer anderen Aufnahme.")
-                else:
-                    await self._send_audio_response(turn_context,
-                                                    "Ich konnte Sie nicht verstehen. Bitte sprechen Sie deutlicher.")
-                return None
-
-        except Exception as e:
-            print(f"❌ Fehler bei Audio-Verarbeitung: {e}")
-            await self._send_audio_response(turn_context, "Fehler beim Verarbeiten der Sprache.")
-            return None
 
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
         """
@@ -1081,27 +1083,6 @@ class RegistrationAudioBot(ActivityHandler):
         speech_text = re.sub(r'\s+', ' ', speech_text)  # Mehrfache Leerzeichen entfernen
         return speech_text.strip()
 
-    def _get_mock_input(self, state: str) -> str:
-        """Mock-Eingaben für Tests ohne Speech Service"""
-        mock_responses = {
-            DialogState.GREETING: "ja",
-            DialogState.ASK_CONSENT: "ja",
-            DialogState.ASK_GENDER: "männlich",
-            DialogState.ASK_TITLE: "kein",
-            DialogState.ASK_FIRST_NAME: "Max",
-            DialogState.ASK_LAST_NAME: "Mustermann",
-            DialogState.ASK_BIRTHDATE: "15.03.1990",
-            DialogState.ASK_EMAIL: "max.mustermann@example.com",
-            DialogState.ASK_PHONE: "0123456789",
-            DialogState.ASK_STREET: "Musterstraße",
-            DialogState.ASK_HOUSE_NUMBER: "123",
-            DialogState.ASK_HOUSE_ADDITION: "kein",
-            DialogState.ASK_POSTAL: "12345",
-            DialogState.ASK_CITY: "Berlin",
-            DialogState.ASK_COUNTRY: "Deutschland",
-            DialogState.FINAL_CONFIRMATION: "ja"
-        }
-        return mock_responses.get(state, "ja")
 
     async def _send_recognized_text_display(self, turn_context: TurnContext, recognized_text: str):
         """
@@ -1404,17 +1385,16 @@ class RegistrationAudioBot(ActivityHandler):
 
     async def _handle_stt_error(self, turn_context: TurnContext, error_msg: str):
         """
-        Spezifische Behandlung verschiedener STT-Fehler
+        Erweiterte STT-Fehlerbehandlung für FFmpeg-konvertierte Audios
         """
         error_responses = {
-            "INVALID_HEADER": "Das Audio-Format ist nicht kompatibel. Bitte nehmen Sie eine neue Sprachnachricht auf.",
-            "0xa": "Probleme mit der Audio-Datei. Bitte versuchen Sie eine andere Aufnahme.",
-            "NoMatch": "Ich konnte keine Sprache in der Audio-Datei erkennen. Bitte sprechen Sie deutlicher.",
-            "Canceled": "Die Spracherkennung wurde unterbrochen. Bitte versuchen Sie es erneut.",
-            "timeout": "Die Verarbeitung dauerte zu lange. Bitte senden Sie eine kürzere Nachricht."
+            "INVALID_HEADER": "Das Audio-Format konnte trotz Konvertierung nicht verarbeitet werden.",
+            "0xa": "Die Audio-Datei scheint beschädigt zu sein.",
+            "NoMatch": "Ich konnte keine Sprache erkennen. Sprechen Sie bitte deutlicher.",
+            "Canceled": "Die Spracherkennung wurde unterbrochen.",
+            "timeout": "Die Audio-Datei ist zu lang. Bitte senden Sie eine kürzere Nachricht."
         }
 
-        # Finde passende Antwort
         response = "Ich konnte Sie nicht verstehen. Bitte versuchen Sie es erneut."
         for error_key, error_response in error_responses.items():
             if error_key.lower() in error_msg.lower():
