@@ -1,0 +1,23 @@
+class DialogState:
+    """Defines the possible states within the conversation flow"""
+    GREETING = "greeting"
+    ASK_CONSENT = "ask_consent"
+    ASK_GENDER = "ask_gender"
+    ASK_TITLE = "ask_title"
+    ASK_FIRST_NAME = "ask_first_name"
+    ASK_LAST_NAME = "ask_last_name"
+    ASK_BIRTHDATE = "ask_birthdate"
+    ASK_EMAIL = "ask_email"
+    ASK_PHONE = "ask_phone"
+    ASK_STREET = "ask_street"
+    ASK_HOUSE_NUMBER = "ask_house_number"
+    ASK_HOUSE_ADDITION = "ask_house_addition"
+    ASK_POSTAL = "ask_postal"
+    ASK_CITY = "ask_city"
+    ASK_COUNTRY = "ask_country"
+    FINAL_CONFIRMATION = "final_confirmation"
+    COMPLETED = "completed"
+    ERROR = "error"
+
+    ## Confirmation states (dynamically created for each field, e.g., 'confirm_gender')
+    CONFIRM_PREFIX = "confirm_"

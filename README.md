@@ -2,6 +2,10 @@
 
 A sophisticated voice-enabled chatbot built with Azure services and Django Framework that conducts natural language conversations to systematically collect and store complete user account information.
 
+You can explore a live example of the project [here](https://fgtcc-e6e7b3anbtbwg7hz.canadacentral-01.azurewebsites.net/).
+For interactions via Telegram, use the bot: [@Registrierungs_bot](https://t.me/Registrierungs_bot)
+
+
 ## Overview
 
 This semester project demonstrates the integration of multiple Azure cognitive services to create an intelligent voice bot capable of:

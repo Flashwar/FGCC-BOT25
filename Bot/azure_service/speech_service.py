@@ -1,91 +1,130 @@
 import azure.cognitiveservices.speech as speechsdk
 import tempfile
 import os
+from typing import Optional, Dict, Any, List
+
+from FCCSemesterAufgabe.settings import isDocker, AZURE_KEYVAULT
 
 
-# Class for TTS and STT
 class AzureSpeechService:
-    def __init__(self, keyvault_service=None):
-        if not keyvault_service:
-            raise ValueError("KeyVault Service muss übergeben werden")
+    def __init__(self):
+        # Initializes the Azure Speech Service
 
-        # Retrieve secrets from Azure Key Vault
-        self.speech_key = keyvault_service.get_secret_from_keyvault("COG-KEY")
-        self.service_region = keyvault_service.get_secret_from_keyvault("AZURE-SPEECH-REGION")
+        # Determine key and region
+        if not isDocker:
+            self.speech_key = AZURE_KEYVAULT.get_secret_from_keyvault("COG-KEY")
+            self.service_region = AZURE_KEYVAULT.get_secret_from_keyvault("AZURE-SPEECH-REGION")
+        else:
+            self.speech_key = None
+            self.service_region = None
 
         if not self.speech_key or not self.service_region:
-            raise ValueError("Werte im Keyvault konnten nicht gefunden werden.")
+            raise ValueError("Speech Key and Service Region must be provided (directly or via KeyVault)")
 
-        print(f"Speech Service initialisiert - Region: {self.service_region}")
+        print(f"Azure Speech Service initialized - Region: {self.service_region}")
 
-        # Configuration for Text-to-Speech
+        # Base configurations
+        self._create_configs()
+
+
+    def _create_configs(self):
+        # Creates the base configurations for TTS and STT
+
+        # Text-to-Speech configuration
         self.tts_config = speechsdk.SpeechConfig(
             subscription=self.speech_key,
             region=self.service_region
         )
         self.tts_config.speech_synthesis_voice_name = "de-DE-KatjaNeural"
 
-        # Configuration for Speech-to-Text
+        # Speech-to-Text configuration
         self.stt_config = speechsdk.SpeechConfig(
             subscription=self.speech_key,
             region=self.service_region
         )
         self.stt_config.speech_recognition_language = "de-DE"
 
+
     def text_to_speech_bytes(self, text: str, voice: str = "de-DE-KatjaNeural"):
-        # Converts text to audio bytes using Azure TTS (Text-to-Speech)
+        # Converts text to audio bytes using Azure TTS
 
         try:
-            print(f"TTS für Text: '{text[:50]}...'")
-
-            self.tts_config.speech_synthesis_voice_name = voice
-
-            # Create a temporary WAV file to store the audio output
-            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            temp_file.close()
-
-            audio_config = speechsdk.audio.AudioOutputConfig(filename=temp_file.name)
-
-            # Create a synthesizer with config
-            speech_synthesizer = speechsdk.SpeechSynthesizer(
-                speech_config=self.tts_config,
-                audio_config=audio_config
-            )
-
-            # Perform synthesis
-            result = speech_synthesizer.speak_text_async(text).get()
-
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                # Read and return the generated audio
-                with open(temp_file.name, 'rb') as f:
-                    audio_bytes = f.read()
-                # delete the temporary file
-                os.unlink(temp_file.name)
-                print(f" TTS erfolgreich: {len(audio_bytes)} bytes")
-                return audio_bytes
-            else:
-                os.unlink(temp_file.name)
-                print(f"TTS Error: {result.reason}")
+            if not text or not text.strip():
+                print("Empty text for TTS")
                 return None
 
+            print(f"TTS for text: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            print(f"Using voice: {voice}")
+
+            # Set voice
+            self.tts_config.speech_synthesis_voice_name = voice
+
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_filename = temp_file.name
+
+            try:
+                # Audio configuration
+                audio_config = speechsdk.audio.AudioOutputConfig(filename=temp_filename)
+
+                # Create synthesizer
+                speech_synthesizer = speechsdk.SpeechSynthesizer(
+                    speech_config=self.tts_config,
+                    audio_config=audio_config
+                )
+
+                # Perform synthesis
+                result = speech_synthesizer.speak_text_async(text).get()
+
+                if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                    # Read audio data
+                    with open(temp_filename, 'rb') as f:
+                        audio_bytes = f.read()
+
+                    print(f"TTS successful: {len(audio_bytes)} bytes generated")
+                    return audio_bytes
+
+                elif result.reason == speechsdk.ResultReason.Canceled:
+                    cancellation = result.cancellation_details
+                    print(f"TTS canceled: {cancellation.reason}")
+                    if cancellation.error_details:
+                        print(f"Error details: {cancellation.error_details}")
+                    return None
+                else:
+                    print(f"TTS error: {result.reason}")
+                    return None
+
+            finally:
+                # Delete temporary file
+                if os.path.exists(temp_filename):
+                    os.unlink(temp_filename)
+
         except Exception as e:
-            print(f"❌ Text-to-Speech Exception: {e}")
+            print(f"Text-to-Speech Exception: {e}")
             return None
 
-    def speech_to_text_from_bytes(self, audio_bytes: bytes, language: str = "de-DE"):
-        # Converts audio bytes into text using Azure STT (Speech-to-Text)
-        try:
-            print(f"STT für Audio: {len(audio_bytes)} bytes")
 
-            # Save audio bytes to a temporary WAV file
+    def speech_to_text_from_bytes(self, audio_bytes: bytes, language: str = "de-DE"):
+        # Converts audio bytes to text using Azure STT
+        try:
+            if not audio_bytes or len(audio_bytes) == 0:
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": "No audio data available",
+                    "language": language
+                }
+
+            # Create temporary audio file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 temp_file.write(audio_bytes)
-                temp_file.flush()
+                temp_filename = temp_file.name
 
-                # Configure audio input
-                audio_config = speechsdk.audio.AudioConfig(filename=temp_file.name)
+            try:
+                # Audio configuration
+                audio_config = speechsdk.audio.AudioConfig(filename=temp_filename)
 
-                # Create a new STT config with the specified language
+                # STT configuration for desired language
                 stt_config = speechsdk.SpeechConfig(
                     subscription=self.speech_key,
                     region=self.service_region
@@ -101,40 +140,103 @@ class AzureSpeechService:
                 # Perform recognition
                 result = speech_recognizer.recognize_once()
 
-                # Delete the temporary file
-                os.unlink(temp_file.name)
-
-                # Process result
                 if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                    print(f"STT erfolgreich: '{result.text}'")
+                    print(f"STT successful: '{result.text}'")
                     return {
                         "success": True,
                         "text": result.text,
                         "language": language,
+                        "confidence": getattr(result, 'confidence', None),
                         "duration": getattr(result, 'duration', None)
                     }
+
                 elif result.reason == speechsdk.ResultReason.NoMatch:
-                    print("STT: Keine Sprache erkannt")
+                    print("STT: No speech detected")
                     return {
                         "success": False,
                         "text": "",
-                        "error": "No speech recognized",
-                        "reason": "NoMatch"
-                    }
-                else:
-                    print(f"STT Error: {result.reason}")
-                    return {
-                        "success": False,
-                        "text": "",
-                        "error": f"STT error: {result.reason}",
-                        "reason": str(result.reason)
+                        "error": "No speech detected in audio file",
+                        "reason": "NoMatch",
+                        "language": language
                     }
 
+                elif result.reason == speechsdk.ResultReason.Canceled:
+                    cancellation = result.cancellation_details
+                    error_msg = f"STT canceled: {cancellation.reason}"
+                    if cancellation.error_details:
+                        error_msg += f" - {cancellation.error_details}"
+
+                    print(f"❌ {error_msg}")
+                    return {
+                        "success": False,
+                        "text": "",
+                        "error": error_msg,
+                        "reason": "Canceled",
+                        "language": language
+                    }
+                else:
+                    print(f"❌ STT unknown error: {result.reason}")
+                    return {
+                        "success": False,
+                        "text": "",
+                        "error": f"Unknown STT error: {result.reason}",
+                        "reason": str(result.reason),
+                        "language": language
+                    }
+
+            finally:
+                # Delete temporary file
+                if os.path.exists(temp_filename):
+                    os.unlink(temp_filename)
+
         except Exception as e:
-            print(f"Speech-to-Text Exception: {e}")
+            print(f"❌ Speech-to-Text Exception: {e}")
             return {
                 "success": False,
                 "text": "",
                 "error": f"Speech-to-Text Exception: {str(e)}",
-                "exception": str(e)
+                "exception": str(e),
+                "language": language
+            }
+
+
+    def text_to_speech_file(self, text: str, output_file: str, voice: str = "de-DE-KatjaNeural"):
+        # Converts text to audio and saves directly to file
+        try:
+            audio_bytes = self.text_to_speech_bytes(text, voice)
+            if audio_bytes:
+                with open(output_file, 'wb') as f:
+                    f.write(audio_bytes)
+                print(f"Audio saved: {output_file}")
+                return True
+            return False
+        except Exception as e:
+            print(f"❌ Error saving audio file: {e}")
+            return False
+
+
+    def speech_to_text_from_file(self, audio_file: str, language: str = "de-DE"):
+        # Converts audio file to text
+
+        try:
+            if not os.path.exists(audio_file):
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": f"Audio file not found: {audio_file}",
+                    "language": language
+                }
+
+            with open(audio_file, 'rb') as f:
+                audio_bytes = f.read()
+
+            return self.speech_to_text_from_bytes(audio_bytes, language)
+
+        except Exception as e:
+            print(f"❌ Error reading audio file: {e}")
+            return {
+                "success": False,
+                "text": "",
+                "error": f"Error reading audio file: {str(e)}",
+                "language": language
             }
