@@ -1,7 +1,6 @@
 import aiohttp
 import base64
 import re
-import io
 from datetime import datetime
 from typing import Optional
 from injector import inject
@@ -45,7 +44,6 @@ class RegistrationAudioBot(ActivityHandler):
         if isDocker:
             print("⚠️ KeyVault Service nicht verfügbar")
             self.speech_service = None
-            raise Exception("Audio Bot benötigt Speech Service - Docker nicht unterstützt")
         else:
             self.speech_service = AzureSpeechService()
             test_audio = self.speech_service.text_to_speech_bytes("Test")
