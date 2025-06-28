@@ -22,7 +22,7 @@ class BotMessages:
     )
 
     CONSENT_DENIED = (
-        "❌ **Registrierung abgebrochen**\n\n"
+        "**Registrierung abgebrochen**\n\n"
         "Ich verstehe, dass Sie nicht fortfahren möchten. "
         "Die Registrierung wurde beendet.\n\n"
         "Falls Sie Ihre Meinung ändern, können Sie jederzeit eine neue "
@@ -171,7 +171,7 @@ class BotMessages:
     )
 
     SAVE_ERROR = (
-        "❌ **Fehler beim Speichern**\n\n"
+        "**Fehler beim Speichern**\n\n"
         "Entschuldigung, beim Speichern ist ein Problem aufgetreten.\n"
         "• **'Nochmal'** - erneut versuchen\n"
         "• **'Neustart'** - von vorne beginnen"
