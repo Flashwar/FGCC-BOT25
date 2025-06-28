@@ -38,7 +38,7 @@ class RegistrationAudioBot(ActivityHandler):
         self.user_state = user_state
         self.audio_converter = FFmpegAudioConverter()
 
-        asyncio.create_task(self._extend_audio_converter_with_compression())
+        self._extend_audio_converter_with_compression()
 
         # State Accessors
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
