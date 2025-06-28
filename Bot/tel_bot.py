@@ -12,7 +12,8 @@ from .audio_converter import FFmpegAudioConverter
 from .dialogstate import DialogState
 from .validators import DataValidator
 from .services import CustomerService
-from .text_messages import BotMessages, FieldConfig
+from .text_speech_bot import SpeechBotMessages
+from .text_messages import FieldConfig
 from .azure_service.speech_service import AzureSpeechService
 from FCCSemesterAufgabe.settings import isDocker
 
@@ -576,7 +577,7 @@ class RegistrationAudioBot(ActivityHandler):
 
     async def _handle_greeting(self, turn_context: TurnContext, user_profile, *args):
         """Begrüßung (identisch zum Text-Bot)"""
-        greeting_text = self._convert_markdown_to_speech(BotMessages.WELCOME_MESSAGE)
+        greeting_text = self._convert_markdown_to_speech(SpeechBotMessages.WELCOME_MESSAGE)
         await self._send_audio_response(turn_context, greeting_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CONSENT)
 
@@ -585,7 +586,7 @@ class RegistrationAudioBot(ActivityHandler):
         user_input_lower = user_input.lower().strip()
 
         if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
-            consent_text = self._convert_markdown_to_speech(BotMessages.CONSENT_GRANTED)
+            consent_text = self._convert_markdown_to_speech(SpeechBotMessages.CONSENT_GRANTED)
             await self._send_audio_response(turn_context, consent_text)
             user_profile['consent_given'] = True
             user_profile['consent_timestamp'] = datetime.now().isoformat()
@@ -593,7 +594,7 @@ class RegistrationAudioBot(ActivityHandler):
             await self._ask_for_gender(turn_context)
 
         elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
-            denied_text = self._convert_markdown_to_speech(BotMessages.CONSENT_DENIED)
+            denied_text = self._convert_markdown_to_speech(SpeechBotMessages.CONSENT_DENIED)
             await self._send_audio_response(turn_context, denied_text)
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
             await self.user_profile_accessor.set(turn_context, {
@@ -602,12 +603,12 @@ class RegistrationAudioBot(ActivityHandler):
                 'registration_cancelled': True
             })
         else:
-            unclear_text = self._convert_markdown_to_speech(BotMessages.CONSENT_UNCLEAR)
+            unclear_text = self._convert_markdown_to_speech(SpeechBotMessages.CONSENT_UNCLEAR)
             await self._send_audio_response(turn_context, unclear_text)
 
     async def _ask_for_gender(self, turn_context: TurnContext):
         """Geschlecht-Abfrage"""
-        gender_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['gender'])
+        gender_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['gender'])
         await self._send_audio_response(turn_context, gender_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_GENDER)
 
@@ -627,12 +628,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Geschlecht", gender_display, DialogState.CONFIRM_PREFIX + "gender")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['gender'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['gender'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_title(self, turn_context: TurnContext):
         """Titel-Abfrage"""
-        title_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['title'])
+        title_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['title'])
         await self._send_audio_response(turn_context, title_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_TITLE)
 
@@ -661,12 +662,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Titel", user_input, DialogState.CONFIRM_PREFIX + "title")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['title'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['title'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_first_name(self, turn_context: TurnContext):
         """Vorname-Abfrage"""
-        name_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['first_name'])
+        name_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['first_name'])
         await self._send_audio_response(turn_context, name_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_FIRST_NAME)
 
@@ -682,12 +683,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Vorname", user_input, DialogState.CONFIRM_PREFIX + "first_name")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['first_name'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['first_name'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_last_name(self, turn_context: TurnContext):
         """Nachname-Abfrage"""
-        name_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['last_name'])
+        name_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['last_name'])
         await self._send_audio_response(turn_context, name_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_LAST_NAME)
 
@@ -703,12 +704,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Nachname", user_input, DialogState.CONFIRM_PREFIX + "last_name")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['last_name'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['last_name'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_birthdate(self, turn_context: TurnContext):
         """Geburtsdatum-Abfrage"""
-        birthdate_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['birthdate'])
+        birthdate_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['birthdate'])
         await self._send_audio_response(turn_context, birthdate_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_BIRTHDATE)
 
@@ -732,12 +733,12 @@ class RegistrationAudioBot(ActivityHandler):
             await self._confirm_field(turn_context, "Geburtsdatum", birthdate.strftime('%d.%m.%Y'),
                                       DialogState.CONFIRM_PREFIX + "birthdate")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['birthdate'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['birthdate'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_email(self, turn_context: TurnContext):
         """E-Mail-Abfrage"""
-        email_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['email'])
+        email_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['email'])
         await self._send_audio_response(turn_context, email_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_EMAIL)
 
@@ -750,7 +751,7 @@ class RegistrationAudioBot(ActivityHandler):
         if DataValidator.validate_email(email):
             if not user_profile.get('correction_mode'):
                 if await self.customer_service.email_exists_in_db(email.strip().lower()):
-                    error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['email_exists'])
+                    error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['email_exists'])
                     await self._send_audio_response(turn_context, error_text)
                     return
 
@@ -763,12 +764,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "E-Mail", email, DialogState.CONFIRM_PREFIX + "email")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['email'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['email'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_phone(self, turn_context: TurnContext):
         """Telefon-Abfrage"""
-        phone_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['phone'])
+        phone_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['phone'])
         await self._send_audio_response(turn_context, phone_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_PHONE)
 
@@ -789,12 +790,12 @@ class RegistrationAudioBot(ActivityHandler):
             await self._confirm_field(turn_context, "Telefonnummer", phone or user_input,
                                       DialogState.CONFIRM_PREFIX + "phone")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['phone'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['phone'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_street(self, turn_context: TurnContext):
         """Straße-Abfrage"""
-        street_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['street'])
+        street_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['street'])
         await self._send_audio_response(turn_context, street_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_STREET)
 
@@ -810,12 +811,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Straße", user_input, DialogState.CONFIRM_PREFIX + "street")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['street'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['street'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_house_number(self, turn_context: TurnContext):
         """Hausnummer-Abfrage"""
-        house_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['house_number'])
+        house_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['house_number'])
         await self._send_audio_response(turn_context, house_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_NUMBER)
 
@@ -836,12 +837,12 @@ class RegistrationAudioBot(ActivityHandler):
             else:
                 raise ValueError()
         except ValueError:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['house_number'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['house_number'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_house_addition(self, turn_context: TurnContext):
         """Hausnummernzusatz-Abfrage"""
-        addition_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['house_addition'])
+        addition_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['house_addition'])
         await self._send_audio_response(turn_context, addition_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_ADDITION)
 
@@ -873,7 +874,7 @@ class RegistrationAudioBot(ActivityHandler):
 
     async def _ask_for_postal(self, turn_context: TurnContext):
         """Postleitzahl-Abfrage"""
-        postal_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['postal'])
+        postal_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['postal'])
         await self._send_audio_response(turn_context, postal_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_POSTAL)
 
@@ -889,12 +890,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Postleitzahl", user_input, DialogState.CONFIRM_PREFIX + "postal")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['postal'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['postal'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_city(self, turn_context: TurnContext):
         """Stadt-Abfrage"""
-        city_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['city'])
+        city_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['city'])
         await self._send_audio_response(turn_context, city_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CITY)
 
@@ -910,12 +911,12 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Ort", user_input, DialogState.CONFIRM_PREFIX + "city")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['city'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['city'])
             await self._send_audio_response(turn_context, error_text)
 
     async def _ask_for_country(self, turn_context: TurnContext):
         """Land-Abfrage"""
-        country_text = self._convert_markdown_to_speech(BotMessages.FIELD_PROMPTS['country'])
+        country_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['country'])
         await self._send_audio_response(turn_context, country_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_COUNTRY)
 
@@ -931,14 +932,14 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Land", user_input, DialogState.CONFIRM_PREFIX + "country")
         else:
-            error_text = self._convert_markdown_to_speech(BotMessages.VALIDATION_ERRORS['country'])
+            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['country'])
             await self._send_audio_response(turn_context, error_text)
 
     # === CONFIRMATION UND FINAL HANDLING ===
 
     async def _confirm_field(self, turn_context: TurnContext, field_name: str, value: str, confirmation_state: str):
         """Feld-Bestätigung (Audio-Version)"""
-        confirmation_message = BotMessages.confirmation_prompt(field_name, value)
+        confirmation_message = SpeechBotMessages.confirmation_prompt(field_name, value)
         confirmation_text = self._convert_markdown_to_speech(confirmation_message)
         await self._send_audio_response(turn_context, confirmation_text)
         await self.dialog_state_accessor.set(turn_context, confirmation_state)
@@ -962,7 +963,7 @@ class RegistrationAudioBot(ActivityHandler):
             found_correction_step = False
             for conf_state, _, correction_ask_func in self.dialog_flow:
                 if dialog_state == conf_state:
-                    rejected_text = self._convert_markdown_to_speech(BotMessages.CONFIRMATION_REJECTED)
+                    rejected_text = self._convert_markdown_to_speech(SpeechBotMessages.CONFIRMATION_REJECTED)
                     await self._send_audio_response(turn_context, rejected_text)
                     await correction_ask_func(turn_context)
                     found_correction_step = True
@@ -972,13 +973,13 @@ class RegistrationAudioBot(ActivityHandler):
                     "Entschuldigung, ich kann diesen Schritt nicht korrigieren.")
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
         else:
-            unclear_text = self._convert_markdown_to_speech(BotMessages.CONFIRMATION_UNCLEAR)
+            unclear_text = self._convert_markdown_to_speech(SpeechBotMessages.CONFIRMATION_UNCLEAR)
             await self._send_audio_response(turn_context, unclear_text)
 
     async def _show_final_summary(self, turn_context: TurnContext):
         """Finale Zusammenfassung (Audio-Version)"""
         user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
-        summary_message = BotMessages.final_summary(user_profile)
+        summary_message = SpeechBotMessages.final_summary(user_profile)
         summary_text = self._convert_markdown_to_speech(summary_message)
         await self._send_audio_response(turn_context, summary_text)
         await self.dialog_state_accessor.set(turn_context, DialogState.FINAL_CONFIRMATION)
@@ -988,13 +989,13 @@ class RegistrationAudioBot(ActivityHandler):
         user_input_lower = user_input.lower().strip()
 
         if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
-            save_text = self._convert_markdown_to_speech(BotMessages.SAVE_IN_PROGRESS)
+            save_text = self._convert_markdown_to_speech(SpeechBotMessages.SAVE_IN_PROGRESS)
             await self._send_audio_response(turn_context, save_text)
 
             success = await self._save_customer_data(user_profile)
 
             if success:
-                success_text = self._convert_markdown_to_speech(BotMessages.REGISTRATION_SUCCESS)
+                success_text = self._convert_markdown_to_speech(SpeechBotMessages.REGISTRATION_SUCCESS)
                 await self._send_audio_response(turn_context, success_text)
                 await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
                 await self.user_profile_accessor.set(turn_context, {
@@ -1002,7 +1003,7 @@ class RegistrationAudioBot(ActivityHandler):
                     'completion_timestamp': datetime.now().isoformat()
                 })
             else:
-                error_text = self._convert_markdown_to_speech(BotMessages.SAVE_ERROR)
+                error_text = self._convert_markdown_to_speech(SpeechBotMessages.SAVE_ERROR)
                 await self._send_audio_response(turn_context, error_text)
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
 
@@ -1013,14 +1014,14 @@ class RegistrationAudioBot(ActivityHandler):
             await self._handle_restart_request(turn_context)
 
         else:
-            unclear_text = self._convert_markdown_to_speech(BotMessages.FINAL_CONFIRMATION_UNCLEAR)
+            unclear_text = self._convert_markdown_to_speech(SpeechBotMessages.FINAL_CONFIRMATION_UNCLEAR)
             await self._send_audio_response(turn_context, unclear_text)
 
     # === CORRECTION HANDLING ===
 
     async def _start_correction_process(self, turn_context: TurnContext, user_profile):
         """Korrektur-Prozess starten (Audio-Version)"""
-        correction_text = self._convert_markdown_to_speech(BotMessages.CORRECTION_OPTIONS)
+        correction_text = self._convert_markdown_to_speech(SpeechBotMessages.CORRECTION_OPTIONS)
         await self._send_audio_response(turn_context, correction_text)
         await self.dialog_state_accessor.set(turn_context, "correction_selection")
 
@@ -1063,7 +1064,7 @@ class RegistrationAudioBot(ActivityHandler):
             target_state = dialog_state_mapping.get(target_field)
             field_display = FieldConfig.FIELD_DISPLAY_NAMES.get(target_field, "das gewählte Feld")
 
-            correction_message = BotMessages.correction_start(field_display)
+            correction_message = SpeechBotMessages.correction_start(field_display)
             correction_text = self._convert_markdown_to_speech(correction_message)
             await self._send_audio_response(turn_context, correction_text)
 
@@ -1073,14 +1074,14 @@ class RegistrationAudioBot(ActivityHandler):
             await self.user_profile_accessor.set(turn_context, user_profile)
 
         else:
-            not_understood_text = self._convert_markdown_to_speech(BotMessages.CORRECTION_NOT_UNDERSTOOD)
+            not_understood_text = self._convert_markdown_to_speech(SpeechBotMessages.CORRECTION_NOT_UNDERSTOOD)
             await self._send_audio_response(turn_context, not_understood_text)
 
     async def _check_correction_mode_and_handle(self, turn_context: TurnContext, user_profile,
                                                 field_name, field_display, new_value):
         """Korrektur-Modus behandeln (identisch zum Text-Bot)"""
         if user_profile.get('correction_mode'):
-            correction_message = BotMessages.correction_success(field_display, new_value)
+            correction_message = SpeechBotMessages.correction_success(field_display, new_value)
             correction_text = self._convert_markdown_to_speech(correction_message)
             await self._send_audio_response(turn_context, correction_text)
 
@@ -1100,7 +1101,7 @@ class RegistrationAudioBot(ActivityHandler):
 
         if any(keyword in user_input_lower for keyword in FieldConfig.RESTART_KEYWORDS):
             if user_profile.get('registration_cancelled'):
-                restart_text = self._convert_markdown_to_speech(BotMessages.RESTART_NEW_REGISTRATION)
+                restart_text = self._convert_markdown_to_speech(SpeechBotMessages.RESTART_NEW_REGISTRATION)
                 await self._send_audio_response(turn_context, restart_text)
 
                 await self.user_profile_accessor.set(turn_context, {})
@@ -1108,14 +1109,14 @@ class RegistrationAudioBot(ActivityHandler):
                 await self._handle_greeting(turn_context, {})
 
             elif user_profile.get('consent_given') and not user_profile.get('registration_cancelled'):
-                already_text = self._convert_markdown_to_speech(BotMessages.ALREADY_REGISTERED)
+                already_text = self._convert_markdown_to_speech(SpeechBotMessages.ALREADY_REGISTERED)
                 await self._send_audio_response(turn_context, already_text)
         else:
             if user_profile.get('registration_cancelled'):
-                help_text = self._convert_markdown_to_speech(BotMessages.REGISTRATION_CANCELLED_HELP)
+                help_text = self._convert_markdown_to_speech(SpeechBotMessages.REGISTRATION_CANCELLED_HELP)
                 await self._send_audio_response(turn_context, help_text)
             else:
-                help_text = self._convert_markdown_to_speech(BotMessages.ALREADY_COMPLETED_HELP)
+                help_text = self._convert_markdown_to_speech(SpeechBotMessages.ALREADY_COMPLETED_HELP)
                 await self._send_audio_response(turn_context, help_text)
 
     async def _handle_unknown_state(self, turn_context: TurnContext, user_profile, user_input):
@@ -1123,20 +1124,20 @@ class RegistrationAudioBot(ActivityHandler):
         user_input_lower = user_input.lower()
 
         if any(keyword in user_input_lower for keyword in FieldConfig.RESTART_KEYWORDS):
-            restart_text = self._convert_markdown_to_speech(BotMessages.UNKNOWN_STATE_RESTART)
+            restart_text = self._convert_markdown_to_speech(SpeechBotMessages.UNKNOWN_STATE_RESTART)
             await self._send_audio_response(turn_context, restart_text)
 
             await self.user_profile_accessor.set(turn_context, {})
             await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
             await self._handle_greeting(turn_context, {})
         else:
-            confusion_text = self._convert_markdown_to_speech(BotMessages.UNKNOWN_STATE_CONFUSION)
+            confusion_text = self._convert_markdown_to_speech(SpeechBotMessages.UNKNOWN_STATE_CONFUSION)
             await self._send_audio_response(turn_context, confusion_text)
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
 
     async def _handle_restart_request(self, turn_context: TurnContext):
         """Restart Request (Audio-Version)"""
-        restart_text = self._convert_markdown_to_speech(BotMessages.RESTART_MESSAGE)
+        restart_text = self._convert_markdown_to_speech(SpeechBotMessages.RESTART_MESSAGE)
         await self._send_audio_response(turn_context, restart_text)
 
         await self.user_profile_accessor.set(turn_context, {})
