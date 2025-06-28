@@ -1,5 +1,5 @@
 from botbuilder.core import ConversationState, UserState, MemoryStorage
-from .tel_bot import AudioBot
+from .tel_bot import RegistrationAudioBot
 from .message_bot import RegistrationTextBot
 from .services import CustomerService
 
@@ -17,7 +17,7 @@ def create_bot_instances():
         customer_service = CustomerService()
 
         # Instantiate bots
-        tele_bot = AudioBot(conversation_state, user_state, customer_service)
+        tele_bot = RegistrationAudioBot(conversation_state, user_state, customer_service)
         web_bot = RegistrationTextBot(conversation_state, user_state, customer_service)
 
 
