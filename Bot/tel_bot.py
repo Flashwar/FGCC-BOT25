@@ -423,35 +423,118 @@ class RegistrationAudioBot(ActivityHandler):
     # === AUDIO OUTPUT ===
 
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
-        """Sendet NUR Audio-Antworten (kein Text-Display mehr)"""
+        """Sendet NUR Audio-Antworten mit Längen-Optimierung"""
         try:
             print(f"🔊 Generiere Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
 
             # Text für Sprache optimieren
             speech_text = self._convert_markdown_to_speech(text)
 
-            # TTS
-            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+            # Text in kleinere Chunks aufteilen wenn zu lang
+            chunks = self._split_text_for_tts(speech_text)
 
-            if audio_bytes and len(audio_bytes) > 0:
-                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                attachment = Attachment(
-                    content_type="audio/wav",
-                    content_url=f"data:audio/wav;base64,{audio_base64}",
-                    name="bot_response.wav"
-                )
-                reply = MessageFactory.attachment(attachment)
-                # Kein Text mehr - nur Audio
-                await turn_context.send_activity(reply)
-                print("✅ Audio-Nachricht gesendet (nur Audio)")
-            else:
-                # Fallback nur bei TTS-Fehler
-                await turn_context.send_activity(MessageFactory.text(f"❌ [TTS fehlgeschlagen] {text}"))
+            for i, chunk in enumerate(chunks):
+                try:
+                    # TTS für jeden Chunk
+                    audio_bytes = self.speech_service.text_to_speech_bytes(chunk)
+
+                    if audio_bytes and len(audio_bytes) > 0:
+                        # Prüfe Audio-Größe (Telegram-Limit: ~50MB, aber besser kleiner halten)
+                        if len(audio_bytes) > 10 * 1024 * 1024:  # 10MB Limit
+                            print(f"⚠️ Audio-Chunk {i + 1} zu groß ({len(audio_bytes)} bytes) - überspringe")
+                            continue
+
+                        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+
+                        # Prüfe Base64-Größe (Telegram entity limit)
+                        if len(audio_base64) > 200000:  # ~200KB Base64 Limit
+                            print(f"⚠️ Base64-Chunk {i + 1} zu groß ({len(audio_base64)} chars) - sende Fallback")
+                            await self._send_text_fallback(turn_context, chunk)
+                            continue
+
+                        attachment = Attachment(
+                            content_type="audio/wav",
+                            content_url=f"data:audio/wav;base64,{audio_base64}",
+                            name=f"bot_response_{i + 1}.wav"
+                        )
+                        reply = MessageFactory.attachment(attachment)
+                        await turn_context.send_activity(reply)
+                        print(f"✅ Audio-Chunk {i + 1}/{len(chunks)} gesendet")
+
+                        # Kurze Pause zwischen Chunks
+                        if len(chunks) > 1 and i < len(chunks) - 1:
+                            import asyncio
+                            await asyncio.sleep(0.5)
+
+                    else:
+                        print(f"❌ TTS für Chunk {i + 1} fehlgeschlagen")
+                        await self._send_text_fallback(turn_context, chunk)
+
+                except Exception as chunk_error:
+                    print(f"❌ Fehler bei Chunk {i + 1}: {chunk_error}")
+                    await self._send_text_fallback(turn_context, chunk)
 
         except Exception as e:
-            print(f"❌ TTS Fehler: {e}")
-            # Fallback nur bei Fehler
-            await turn_context.send_activity(MessageFactory.text(f"❌ [Audio-Fehler] {text}"))
+            print(f"❌ Allgemeiner TTS Fehler: {e}")
+            await self._send_text_fallback(turn_context, text)
+
+    def _split_text_for_tts(self, text: str, max_length: int = 500) -> list[str]:
+        """
+        Teilt Text in TTS-freundliche Chunks auf.
+        Versucht bei Satzenden zu trennen.
+        """
+        if len(text) <= max_length:
+            return [text]
+
+        chunks = []
+        remaining_text = text
+
+        while remaining_text:
+            if len(remaining_text) <= max_length:
+                chunks.append(remaining_text.strip())
+                break
+
+            # Suche nach einem guten Trennpunkt (Satzende)
+            chunk = remaining_text[:max_length]
+
+            # Versuche bei Punkt zu trennen
+            last_period = chunk.rfind('. ')
+            if last_period > max_length * 0.6:  # Mindestens 60% der gewünschten Länge
+                split_pos = last_period + 1
+            else:
+                # Versuche bei Komma zu trennen
+                last_comma = chunk.rfind(', ')
+                if last_comma > max_length * 0.7:  # Mindestens 70% der gewünschten Länge
+                    split_pos = last_comma + 1
+                else:
+                    # Versuche bei Leerzeichen zu trennen
+                    last_space = chunk.rfind(' ')
+                    if last_space > max_length * 0.8:  # Mindestens 80% der gewünschten Länge
+                        split_pos = last_space
+                    else:
+                        # Harte Trennung
+                        split_pos = max_length
+
+            chunk = remaining_text[:split_pos].strip()
+            if chunk:
+                chunks.append(chunk)
+
+            remaining_text = remaining_text[split_pos:].strip()
+
+        print(f"📝 Text in {len(chunks)} Chunks aufgeteilt")
+        return chunks
+
+    async def _send_text_fallback(self, turn_context: TurnContext, text: str):
+        """
+        Fallback: Sendet Text wenn Audio nicht funktioniert.
+        Nur als letzte Option verwenden.
+        """
+        try:
+            fallback_message = f"🔊 [Audio nicht verfügbar] {text[:500]}{'...' if len(text) > 500 else ''}"
+            await turn_context.send_activity(MessageFactory.text(fallback_message))
+            print("📝 Text-Fallback gesendet")
+        except Exception as e:
+            print(f"❌ Auch Text-Fallback fehlgeschlagen: {e}")
 
     async def _send_recognized_text_display(self, turn_context: TurnContext, recognized_text: str):
         """
