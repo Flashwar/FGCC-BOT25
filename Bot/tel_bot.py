@@ -2,7 +2,7 @@ import aiohttp
 import base64
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from injector import inject
 
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, ConversationState, UserState
@@ -15,55 +15,61 @@ from .services import CustomerService
 from .text_speech_bot import SpeechBotMessages
 from .text_messages import FieldConfig
 from .azure_service.speech_service import AzureSpeechService
+from .azure_service.luis_service import AzureCLUService
 from FCCSemesterAufgabe.settings import isDocker
-
-
-print("=== AUDIO REGISTRATION BOT WIRD GELADEN ===")
 
 
 class RegistrationAudioBot(ActivityHandler):
     """
-    Audio-basierter Registrierungsbot mit identischer Struktur wie RegistrationTextBot.
-    Akzeptiert nur Audio-Input und gibt nur Audio-Output aus.
-    Bei Text-Input wird Fehler ausgegeben, aber State beibehalten.
+    Clean audio-only registration bot with comprehensive CLU integration.
+    Mirrors the structure of RegistrationTextBot but exclusively handles audio input/output.
     """
 
     @inject
     def __init__(self, conversation_state: ConversationState, user_state: UserState, customer_service: CustomerService):
-
-        # Core Services
+        # Core services
         self.customer_service = customer_service
         self.conversation_state = conversation_state
         self.user_state = user_state
         self.audio_converter = FFmpegAudioConverter()
 
-        # State Accessors
+        # State accessors
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
         self.dialog_state_accessor = self.conversation_state.create_property("DialogState")
 
-        # Azure Services initialisieren
+        # Initialize Azure services
         if isDocker:
-            print("⚠️ KeyVault Service nicht verfügbar")
+            print("⚠️ Running in Docker - Azure services disabled")
             self.speech_service = None
+            self.clu_service = None
         else:
-            self.speech_service = AzureSpeechService()
-            test_audio = self.speech_service.text_to_speech_bytes("Test")
-            if test_audio and len(test_audio) > 0:
-                print(f"✅ Speech Service funktioniert! TTS Test: {len(test_audio)} bytes")
-            else:
-                raise Exception("Speech Service TTS Test fehlgeschlagen")
+            # Initialize Speech Service
+            try:
+                self.speech_service = AzureSpeechService()
+                test_audio = self.speech_service.text_to_speech_bytes("Test")
+                if test_audio and len(test_audio) > 0:
+                    print(f"✅ Speech Service initialized: {len(test_audio)} bytes")
+                else:
+                    raise Exception("Speech Service TTS test failed")
+            except Exception as e:
+                print(f"❌ Speech Service initialization failed: {e}")
+                self.speech_service = None
 
-        # Audio Format Unterstützung
+            # Initialize CLU Service
+            try:
+                self.clu_service = AzureCLUService()
+                print("✅ CLU Service initialized")
+            except Exception as e:
+                print(f"❌ CLU Service initialization failed: {e}")
+                self.clu_service = None
+
+        # Audio format support
         self.supported_audio_types = {
             'audio/ogg', 'audio/mpeg', 'audio/wav', 'audio/webm', 'audio/mp3',
             'audio/x-wav', 'audio/wave', 'audio/opus', 'audio/aac', 'audio/m4a'
         }
 
-        self.azure_compatible_formats = {
-            'audio/wav', 'audio/x-wav', 'audio/wave'
-        }
-
-        # Dialog Handlers
+        # Dialog handlers (identical structure to text bot)
         self.dialog_handlers = {
             DialogState.GREETING: self._handle_greeting,
             DialogState.ASK_CONSENT: self._handle_consent_input,
@@ -84,7 +90,7 @@ class RegistrationAudioBot(ActivityHandler):
             "correction_selection": self._handle_correction_selection,
         }
 
-        # Dialog Flow (identisch zum Text-Bot)
+        # Dialog flow (identical to text bot)
         self.dialog_flow = [
             ("confirm_gender", self._ask_for_title, self._ask_for_gender),
             ("confirm_title", self._ask_for_first_name, self._ask_for_title),
@@ -101,39 +107,30 @@ class RegistrationAudioBot(ActivityHandler):
             ("confirm_country", self._show_final_summary, self._ask_for_country),
         ]
 
-        print("✅ Audio Registration Bot initialisiert")
+        print("✅ Audio Registration Bot initialized")
 
-    # === MAIN MESSAGE HANDLING (identische Struktur wie Text-Bot) ===
+    # === MAIN MESSAGE HANDLING ===
 
     async def on_message_activity(self, turn_context: TurnContext):
-        """
-        Hauptmethode für Nachrichten-Verarbeitung.
-        Identische Struktur wie Text-Bot, aber mit Audio-Validierung.
-        """
+        """Main message handler - processes only audio input"""
         print("\n" + "=" * 50)
         print("🎤 AUDIO MESSAGE RECEIVED")
         print("=" * 50)
 
         try:
-            # 1. Prüfe auf /start Kommando (vor Audio-Validierung!)
-            text_input = turn_context.activity.text
-            if text_input and text_input.strip().lower() == '/start':
-                await self._handle_start_command(turn_context)
-                return
-
-            # 2. Input-Typ validieren und extrahieren
+            # Extract and validate input (audio only)
             user_input = await self._extract_and_validate_input(turn_context)
-            if user_input is None:  # Fehler beim Input oder ungültiger Typ
+            if user_input is None:
                 return
 
-            # 3. User Profile und Dialog State abrufen (identisch zum Text-Bot)
+            # Get current state
             user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
             dialog_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
 
             print(f"🎯 Current State: {dialog_state}")
             print(f"🗣️ User Input: '{user_input}'")
 
-            # 4. Auto-start für neue User (identisch zum Text-Bot)
+            # Auto-start for new users
             if not user_profile and dialog_state == DialogState.GREETING:
                 user_profile['first_interaction'] = True
                 await self.user_profile_accessor.set(turn_context, user_profile)
@@ -141,11 +138,9 @@ class RegistrationAudioBot(ActivityHandler):
                 await self._save_state(turn_context)
                 return
 
-            # 5. Dialog-Routing (identische Logik wie Text-Bot)
+            # Route to appropriate handler
             if dialog_state == DialogState.COMPLETED:
                 await self._handle_completed_state(turn_context, user_profile, user_input)
-            elif dialog_state == "restart_confirmation":
-                await self._handle_restart_confirmation(turn_context, user_profile, user_input)
             elif dialog_state == "correction_selection":
                 await self._handle_correction_selection(turn_context, user_profile, user_input)
             elif dialog_state.startswith(DialogState.CONFIRM_PREFIX):
@@ -155,674 +150,391 @@ class RegistrationAudioBot(ActivityHandler):
             else:
                 await self._handle_unknown_state(turn_context, user_profile, user_input)
 
-            # 6. State speichern (identisch zum Text-Bot)
+            # Save state
             await self._save_state(turn_context)
 
         except Exception as e:
-            print(f"❌ Fehler in on_message_activity: {e}")
+            print(f"❌ Error in on_message_activity: {e}")
             await self._send_audio_response(turn_context,
                                             "Entschuldigung, es gab einen Fehler. Bitte versuchen Sie es erneut.")
 
     async def on_members_added_activity(self, members_added: [ChannelAccount], turn_context: TurnContext):
-        """Identisch zum Text-Bot"""
+        """Handle new members joining"""
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
                 await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
                 await self._handle_greeting(turn_context,
                                             await self.user_profile_accessor.get(turn_context, lambda: {}))
                 break
-
         await self._save_state(turn_context)
 
-    async def _handle_start_command(self, turn_context: TurnContext):
-        """
-        Behandelt /start Kommando.
-        - Wenn in Registrierung: Bestätigung erfragen
-        - Wenn bereits fertig/nicht gestartet: Direkt neu starten
-        """
-        print("🔄 /start Kommando erkannt")
-
-        user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
-        dialog_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
-
-        # Prüfe ob User bereits in aktiver Registrierung ist
-        is_in_registration = self._is_in_active_registration(dialog_state, user_profile)
-
-        if is_in_registration:
-            # User ist mitten in der Registrierung - Bestätigung erfragen
-            print(f"🤔 User ist in aktiver Registrierung (State: {dialog_state})")
-            await self._ask_restart_confirmation(turn_context)
-        else:
-            # User ist nicht in aktiver Registrierung - direkt neu starten
-            print(f"✅ User nicht in aktiver Registrierung (State: {dialog_state}) - direkter Neustart")
-            await self._execute_restart(turn_context)
-
-        await self._save_state(turn_context)
-
-    def _is_in_active_registration(self, dialog_state: str, user_profile: dict) -> bool:
-        """
-        Prüft ob User sich in einer aktiven Registrierung befindet.
-        """
-        # States die als "aktive Registrierung" gelten
-        active_registration_states = [
-            DialogState.ASK_CONSENT,
-            DialogState.ASK_GENDER,
-            DialogState.ASK_TITLE,
-            DialogState.ASK_FIRST_NAME,
-            DialogState.ASK_LAST_NAME,
-            DialogState.ASK_BIRTHDATE,
-            DialogState.ASK_EMAIL,
-            DialogState.ASK_PHONE,
-            DialogState.ASK_STREET,
-            DialogState.ASK_HOUSE_NUMBER,
-            DialogState.ASK_HOUSE_ADDITION,
-            DialogState.ASK_POSTAL,
-            DialogState.ASK_CITY,
-            DialogState.ASK_COUNTRY,
-            DialogState.FINAL_CONFIRMATION,
-            "correction_selection",
-        ]
-
-        # Auch alle Bestätigungs-States
-        if dialog_state.startswith(DialogState.CONFIRM_PREFIX):
-            return True
-
-        # Prüfe normale Registration-States
-        if dialog_state in active_registration_states:
-            return True
-
-        # Prüfe ob User bereits Daten eingegeben hat (auch bei GREETING)
-        if dialog_state == DialogState.GREETING and user_profile:
-            # Wenn User schon mal Daten eingegeben hat, ist es eine Fortsetzung
-            has_registration_data = any(key in user_profile for key in [
-                'consent_given', 'gender', 'first_name', 'last_name',
-                'email', 'telephone', 'street_name'
-            ])
-            return has_registration_data
-
-        return False
-
-    async def _ask_restart_confirmation(self, turn_context: TurnContext):
-        """
-        Fragt User ob wirklich neu gestartet werden soll.
-        """
-        # Speichere aktuellen State um später zurückkehren zu können
-        current_state = await self.dialog_state_accessor.get(turn_context, lambda: DialogState.GREETING)
-        user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
-        user_profile['previous_state'] = current_state
-        await self.user_profile_accessor.set(turn_context, user_profile)
-
-        confirmation_text = (
-            "Sie sind gerade mitten in der Registrierung. "
-            "Möchten Sie wirklich von vorne beginnen? "
-            "Alle bisherigen Eingaben gehen dabei verloren. "
-            "Sagen Sie 'ja' zum Neustarten oder 'nein' zum Fortfahren."
-        )
-
-        await self._send_audio_response(turn_context, confirmation_text)
-        await self.dialog_state_accessor.set(turn_context, "restart_confirmation")
-
-    async def _handle_restart_confirmation(self, turn_context: TurnContext, user_profile, user_input):
-        """
-        Behandelt die Antwort auf die Neustart-Bestätigung.
-        """
-        user_input_lower = user_input.lower().strip()
-
-        if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
-            # User möchte wirklich neu starten
-            print("✅ User bestätigt Neustart")
-            await self._send_audio_response(turn_context, "Verstanden. Ich starte die Registrierung neu.")
-            await self._execute_restart(turn_context)
-
-        elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
-            # User möchte nicht neu starten - zurück zum vorherigen State
-            print("✅ User möchte nicht neu starten - kehre zum Dialog zurück")
-            await self._send_audio_response(turn_context, "In Ordnung. Dann setzen wir fort.")
-
-            # Kehre zum vorherigen Dialog-State zurück (der vor restart_confirmation war)
-            previous_state = user_profile.get('previous_state', DialogState.GREETING)
-            await self.dialog_state_accessor.set(turn_context, previous_state)
-
-        else:
-            # Unklare Antwort
-            await self._send_audio_response(turn_context,
-                                            "Bitte antworten Sie mit 'ja' um neu zu starten oder 'nein' um fortzufahren.")
-
-    async def _execute_restart(self, turn_context: TurnContext):
-        """
-        Führt den eigentlichen Neustart durch.
-        """
-        print("🔄 Führe Neustart durch...")
-
-        # Alles zurücksetzen
-        await self.user_profile_accessor.set(turn_context, {})
-        await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
-
-        # Neue Registrierung starten
-        await self._handle_greeting(turn_context, {})
-
-    # === INPUT VALIDATION UND AUDIO PROCESSING ===
+    # === INPUT VALIDATION AND PROCESSING ===
 
     async def _extract_and_validate_input(self, turn_context: TurnContext) -> Optional[str]:
-        """
-        Validiert Input-Typ und extrahiert Text aus Audio.
-        Bei Text-Input: Fehler ausgeben, aber State beibehalten.
-        Bei Audio-Input: STT durchführen.
-        """
+        """Extract and validate audio input, reject text input"""
         attachments = turn_context.activity.attachments or []
         audio_attachments = [att for att in attachments if att.content_type in self.supported_audio_types]
         text_input = turn_context.activity.text
 
-        # Fall 1: Text-Input erkannt (State wird beibehalten!)
+        # Reject text input
         if text_input and text_input.strip() and not audio_attachments:
-            print(f"❌ Text-Input erkannt: '{text_input}' - State wird beibehalten")
+            print(f"❌ Text input rejected: '{text_input}'")
             await self._send_audio_response(turn_context,
-                                            "Entschuldigung, ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht anstatt Text.")
+                                            "Entschuldigung, ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht.")
             return None
 
-        # Fall 2: Kein Audio-Input
+        # Require audio input
         if not audio_attachments:
-            print("❌ Kein Audio-Input erkannt")
+            print("❌ No audio input detected")
             await self._send_audio_response(turn_context,
                                             "Hallo! Ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht.")
             return None
 
-        # Fall 3: Audio-Input verarbeiten
+        # Process audio input
         return await self._process_audio_input(turn_context, audio_attachments[0])
 
     async def _process_audio_input(self, turn_context: TurnContext, attachment: Attachment) -> Optional[str]:
-        """
-        Verarbeitet Audio-Attachment mit FFmpeg-Konvertierung und STT
-        """
+        """Process audio attachment with STT and CLU"""
         try:
-            # Audio herunterladen
+            # Download audio
             audio_bytes = await self._download_audio(attachment)
             if not audio_bytes:
                 await self._send_audio_response(turn_context, "Audio konnte nicht geladen werden.")
                 return None
 
-            # Audio validieren und konvertieren
-            processed_audio = await self._validate_and_convert_audio(audio_bytes, attachment.content_type)
+            # Convert to compatible format
+            processed_audio = await self._convert_audio(audio_bytes, attachment.content_type)
             if not processed_audio:
                 await self._send_audio_response(turn_context,
-                                                "Das Audio-Format konnte nicht verarbeitet werden. Bitte versuchen Sie eine andere Aufnahme.")
+                                                "Das Audio-Format konnte nicht verarbeitet werden.")
                 return None
 
             # Speech-to-Text
+            if not self.speech_service:
+                await self._send_audio_response(turn_context, "Spracherkennung ist nicht verfügbar.")
+                return None
+
             stt_result = self.speech_service.speech_to_text_from_bytes(processed_audio)
             print(f"🎤 STT Result: {stt_result}")
 
             if stt_result.get('success'):
                 recognized_text = stt_result.get('text', '').strip()
-                print(f"🗣️ STT Erkannt: '{recognized_text}'")
-
-                # Text anzeigen
-                await self._send_recognized_text_display(turn_context, recognized_text)
+                print(f"🗣️ Recognized: '{recognized_text}'")
                 return recognized_text
             else:
-                error_msg = stt_result.get('error', 'Unbekannter STT-Fehler')
+                error_msg = stt_result.get('error', 'Unknown STT error')
                 await self._handle_stt_error(turn_context, error_msg)
                 return None
 
         except Exception as e:
-            print(f"❌ Fehler bei Audio-Verarbeitung: {e}")
+            print(f"❌ Audio processing error: {e}")
             await self._send_audio_response(turn_context, "Fehler beim Verarbeiten der Sprache.")
             return None
 
     async def _download_audio(self, attachment: Attachment) -> Optional[bytes]:
-        """Audio-Download mit Validierung"""
+        """Download audio from attachment"""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(attachment.content_url) as response:
                     if response.status == 200:
                         audio_bytes = await response.read()
-                        if len(audio_bytes) == 0:
-                            print("❌ Audio-Datei ist leer")
-                            return None
                         if len(audio_bytes) < 100:
-                            print(f"❌ Audio-Datei zu klein: {len(audio_bytes)} bytes")
+                            print(f"❌ Audio file too small: {len(audio_bytes)} bytes")
                             return None
                         return audio_bytes
                     else:
-                        print(f"❌ HTTP Fehler: {response.status}")
+                        print(f"❌ HTTP error: {response.status}")
                         return None
         except Exception as e:
-            print(f"❌ Audio Download Fehler: {e}")
+            print(f"❌ Audio download error: {e}")
             return None
 
-    async def _validate_and_convert_audio(self, audio_bytes: bytes, content_type: str) -> Optional[bytes]:
-        """Audio-Validierung und FFmpeg-Konvertierung"""
+    async def _convert_audio(self, audio_bytes: bytes, content_type: str) -> Optional[bytes]:
+        """Convert audio to Azure-compatible format"""
         try:
-            # Prüfe ob bereits Azure-kompatibel
-            if content_type in self.azure_compatible_formats:
-                validated_audio = self._validate_wav_header(audio_bytes)
-                if validated_audio:
-                    return validated_audio
+            # Check if already compatible
+            if content_type in {'audio/wav', 'audio/x-wav', 'audio/wave'}:
+                if self._validate_wav_header(audio_bytes):
+                    return audio_bytes
 
-            # FFmpeg-Konvertierung
-            if self.audio_converter.ffmpeg_available:
+            # Use FFmpeg converter
+            if hasattr(self.audio_converter, 'convert_to_azure_wav'):
                 return await self.audio_converter.convert_to_azure_wav(audio_bytes)
-            else:
-                print(f"❌ FFmpeg nicht verfügbar - {content_type} wird nicht unterstützt")
-                return None
+
+            return None
+        except Exception as e:
+            print(f"❌ Audio conversion error: {e}")
+            return None
+
+    def _validate_wav_header(self, audio_bytes: bytes) -> bool:
+        """Validate WAV file header"""
+        if len(audio_bytes) < 44:
+            return False
+        return audio_bytes[:4] == b'RIFF' and audio_bytes[8:12] == b'WAVE'
+
+    # === CLU INTEGRATION ===
+
+    async def _extract_entity_with_clu(self, user_input: str, entity_type: str) -> Optional[str]:
+        """Extract specific entity using CLU service"""
+        if not self.clu_service:
+            print("⚠️ CLU service not available")
+            return None
+
+        try:
+            entities = await self.clu_service.get_entities(text=user_input)
+            print(f"🔍 CLU entities for {entity_type}: {entities}")
+
+            for entity in entities:
+                entity_name = entity.get('name', '')
+                entity_text = entity.get('text', '')
+
+                if entity_name == entity_type:
+                    print(f"✅ {entity_type} found: '{entity_text}'")
+                    return entity_text
+
+            print(f"❌ No {entity_type} entity found")
+            return None
 
         except Exception as e:
-            print(f"❌ Audio-Validierung fehlgeschlagen: {e}")
-            return None
-
-    def _validate_wav_header(self, audio_bytes: bytes) -> Optional[bytes]:
-        """WAV-Header Validierung"""
-        try:
-            if len(audio_bytes) < 44:
-                return None
-            if audio_bytes[:4] != b'RIFF' or audio_bytes[8:12] != b'WAVE':
-                return None
-            return audio_bytes
-        except:
+            print(f"❌ CLU extraction error for {entity_type}: {e}")
             return None
 
     # === AUDIO OUTPUT ===
 
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
-        """
-        Sendet Audio als Datei mit Bot Framework 256KB Limit-Handling
-        """
+        """Send audio response with multiple attachment methods"""
+        try:
+            if not self.speech_service:
+                # Fallback to text if TTS unavailable
+                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+                return
+
+            # Convert text for speech
+            speech_text = self._convert_text_for_speech(text)
+
+            # Generate audio
+            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+
+            if not audio_bytes:
+                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+                return
+
+            # Check size limit (256KB for Bot Framework)
+            if len(audio_bytes) > 250000:
+                print(f"⚠️ Audio too large: {len(audio_bytes)} bytes")
+                # Split into smaller chunks or compress
+                await self._send_chunked_audio(turn_context, speech_text)
+                return
+
+            # Try multiple attachment methods
+            success = await self._send_audio_with_fallback(turn_context, audio_bytes)
+
+            if not success:
+                # Final fallback to text
+                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+
+        except Exception as e:
+            print(f"❌ Audio response error: {e}")
+            await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+
+    async def _send_audio_with_fallback(self, turn_context: TurnContext, audio_bytes: bytes) -> bool:
+        """Try multiple methods to send audio"""
+
+        # Method 1: Try as Media Attachment (best for Telegram)
+        try:
+            success = await self._send_audio_as_media(turn_context, audio_bytes)
+            if success:
+                print(f"✅ Audio sent as media: {len(audio_bytes)} bytes")
+                return True
+        except Exception as e:
+            print(f"⚠️ Media attachment failed: {e}")
+
+        # Method 2: Try as Base64 Data URL
+        try:
+            success = await self._send_audio_as_base64(turn_context, audio_bytes)
+            if success:
+                print(f"✅ Audio sent as base64: {len(audio_bytes)} bytes")
+                return True
+        except Exception as e:
+            print(f"⚠️ Base64 attachment failed: {e}")
+
+        # Method 3: Try as File Attachment
+        try:
+            success = await self._send_audio_as_file(turn_context, audio_bytes)
+            if success:
+                print(f"✅ Audio sent as file: {len(audio_bytes)} bytes")
+                return True
+        except Exception as e:
+            print(f"⚠️ File attachment failed: {e}")
+
+        return False
+
+    async def _send_audio_as_media(self, turn_context: TurnContext, audio_bytes: bytes) -> bool:
+        """Send audio as media attachment (preferred for Telegram)"""
         try:
             import tempfile
             import os
 
-            print(f"🔊 Generiere Audio-Datei für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
-
-            # Text für Sprache optimieren
-            speech_text = self._convert_markdown_to_speech(text)
-
-            # TTS generieren
-            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
-
-            if not audio_bytes or len(audio_bytes) == 0:
-                print("❌ TTS fehlgeschlagen - sende Text-Fallback")
-                await self._send_short_text_fallback(turn_context, text)
-                return
-
-            print(f"🎵 Original Audio: {len(audio_bytes)} bytes")
-
-            # KRITISCH: Bot Framework Limit ist 256KB (262144 bytes)
-            BOT_FRAMEWORK_LIMIT = 250000  # 250KB - etwas unter dem Limit für Sicherheit
-
-            final_audio = audio_bytes
-
-            # Prüfe Bot Framework Limit
-            if len(audio_bytes) > BOT_FRAMEWORK_LIMIT:
-                print(f"⚠️ Audio zu groß für Bot Framework ({len(audio_bytes)} > {BOT_FRAMEWORK_LIMIT})")
-
-                # Versuche Kompression
-                compressed_audio = await self._compress_for_bot_framework(audio_bytes)
-
-                if compressed_audio and len(compressed_audio) <= BOT_FRAMEWORK_LIMIT:
-                    final_audio = compressed_audio
-                    print(f"📦 Komprimiert für Bot Framework: {len(compressed_audio)} bytes")
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_file:
+                # Convert to OGG for better Telegram compatibility if FFmpeg available
+                if hasattr(self.audio_converter, 'convert_to_ogg') and self.audio_converter.ffmpeg_available:
+                    try:
+                        ogg_bytes = await self.audio_converter.convert_to_ogg(audio_bytes)
+                        if ogg_bytes:
+                            temp_file.write(ogg_bytes)
+                            content_type = "audio/ogg"
+                        else:
+                            temp_file.write(audio_bytes)
+                            content_type = "audio/wav"
+                    except:
+                        temp_file.write(audio_bytes)
+                        content_type = "audio/wav"
                 else:
-                    print("❌ Auch komprimiert zu groß - verwende Text-Chunking")
-                    await self._send_chunked_audio_small(turn_context, speech_text)
-                    return
+                    temp_file.write(audio_bytes)
+                    content_type = "audio/wav"
 
-            # Audio als File senden (unter 256KB)
-            await self._send_audio_file(turn_context, final_audio)
+                temp_file.flush()
+
+                try:
+                    # Read file for attachment
+                    with open(temp_file.name, 'rb') as audio_file:
+                        file_data = audio_file.read()
+
+                    # Create media attachment
+                    attachment = Attachment(
+                        content_type=content_type,
+                        content=file_data,
+                        name="voice_message.ogg" if content_type == "audio/ogg" else "voice_message.wav"
+                    )
+
+                    # Send as media
+                    reply = MessageFactory.attachment(attachment)
+                    await turn_context.send_activity(reply)
+                    return True
+
+                finally:
+                    # Clean up temp file
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
 
         except Exception as e:
-            print(f"❌ Audio-Fehler: {e}")
-            await self._send_short_text_fallback(turn_context, text)
+            print(f"❌ Media attachment error: {e}")
+            return False
 
-    def _split_text_for_tts(self, text: str, max_length: int = 50) -> list[str]:
-        """
-        Teilt Text in sehr kleine Chunks für Bot Framework Limits
-        """
+    async def _send_audio_as_base64(self, turn_context: TurnContext, audio_bytes: bytes) -> bool:
+        """Send audio as base64 data URL"""
+        try:
+            # Convert to base64
+            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+
+            # Create data URL attachment
+            attachment = Attachment(
+                content_type="audio/wav",
+                content_url=f"data:audio/wav;base64,{audio_base64}",
+                name="voice_response.wav"
+            )
+
+            reply = MessageFactory.attachment(attachment)
+            await turn_context.send_activity(reply)
+            return True
+
+        except Exception as e:
+            print(f"❌ Base64 attachment error: {e}")
+            return False
+
+    async def _send_audio_as_file(self, turn_context: TurnContext, audio_bytes: bytes) -> bool:
+        """Send audio as regular file attachment"""
+        try:
+            attachment = Attachment(
+                content_type="audio/wav",
+                content=audio_bytes,
+                name="response.wav"
+            )
+            reply = MessageFactory.attachment(attachment)
+            await turn_context.send_activity(reply)
+            return True
+
+        except Exception as e:
+            print(f"❌ File attachment error: {e}")
+            return False
+
+    async def _send_chunked_audio(self, turn_context: TurnContext, text: str):
+        """Send large text as multiple smaller audio files"""
+        chunks = self._split_text_for_audio(text, max_length=100)
+
+        for i, chunk in enumerate(chunks):
+            try:
+                audio_bytes = self.speech_service.text_to_speech_bytes(chunk)
+                if audio_bytes and len(audio_bytes) <= 250000:
+                    # Try multiple attachment methods for each chunk
+                    success = await self._send_audio_with_fallback(turn_context, audio_bytes)
+                    if not success:
+                        await turn_context.send_activity(MessageFactory.text(f"🔊 Teil {i + 1}: {chunk}"))
+                else:
+                    await turn_context.send_activity(MessageFactory.text(f"🔊 Teil {i + 1}: {chunk}"))
+            except Exception as e:
+                print(f"❌ Chunk {i + 1} error: {e}")
+                await turn_context.send_activity(MessageFactory.text(f"🔊 Teil {i + 1}: {chunk}"))
+
+    def _split_text_for_audio(self, text: str, max_length: int = 100) -> List[str]:
+        """Split text into chunks suitable for audio"""
         if len(text) <= max_length:
             return [text]
 
         chunks = []
-        remaining_text = text
+        remaining = text
 
-        while remaining_text:
-            if len(remaining_text) <= max_length:
-                chunks.append(remaining_text.strip())
+        while remaining:
+            if len(remaining) <= max_length:
+                chunks.append(remaining.strip())
                 break
 
-            # Suche nach Satzende oder Leerzeichen
-            chunk = remaining_text[:max_length]
-            last_period = chunk.rfind('. ')
-            last_space = chunk.rfind(' ')
-
-            if last_period > max_length * 0.6:
-                split_pos = last_period + 1
-            elif last_space > max_length * 0.7:
-                split_pos = last_space
-            else:
+            # Find good split point
+            chunk = remaining[:max_length]
+            split_pos = chunk.rfind('. ')
+            if split_pos < max_length * 0.7:
+                split_pos = chunk.rfind(' ')
+            if split_pos < max_length * 0.5:
                 split_pos = max_length
 
-            chunk = remaining_text[:split_pos].strip()
-            if chunk:
-                chunks.append(chunk)
+            chunks.append(remaining[:split_pos].strip())
+            remaining = remaining[split_pos:].strip()
 
-            remaining_text = remaining_text[split_pos:].strip()
-
-        print(f"📝 Text in {len(chunks)} sehr kleine Chunks aufgeteilt ({max_length} Zeichen max)")
         return chunks
 
-    async def _send_audio_response_with_compression(self, turn_context: TurnContext, text: str):
-        """
-        File-Upload MIT Kompression für optimale Performance
-        """
-        try:
-            import tempfile
-            import os
-
-            print(f"🔊 Generiere komprimierte Audio-Datei für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
-
-            # Text für Sprache optimieren
-            speech_text = self._convert_markdown_to_speech(text)
-
-            # TTS generieren
-            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
-
-            if not audio_bytes or len(audio_bytes) == 0:
-                await self._send_short_text_fallback(turn_context, text)
-                return
-
-            print(f"🎵 Original Audio: {len(audio_bytes)} bytes")
-
-            # Optional: Komprimierung (falls FFmpeg verfügbar)
-            compressed_audio = audio_bytes
-            if hasattr(self.audio_converter, 'compress_to_mp3') and self.audio_converter.ffmpeg_available:
-                try:
-                    compressed_audio = await self.audio_converter.compress_to_mp3(audio_bytes, bitrate="96k")
-                    if compressed_audio:
-                        print(f"📦 Komprimiert: {len(compressed_audio)} bytes")
-                    else:
-                        compressed_audio = audio_bytes
-                except:
-                    print("⚠️ Kompression fehlgeschlagen, verwende Original")
-                    compressed_audio = audio_bytes
-
-            # Temporäre Datei erstellen
-            file_suffix = '.mp3' if compressed_audio != audio_bytes else '.wav'
-            content_type = 'audio/mp3' if compressed_audio != audio_bytes else 'audio/wav'
-
-            with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as temp_file:
-                temp_file.write(compressed_audio)
-                temp_file.flush()
-
-                try:
-                    # Audio-Datei lesen
-                    with open(temp_file.name, 'rb') as audio_file:
-                        audio_data = audio_file.read()
-
-                    # File-basiertes Attachment
-                    attachment = Attachment(
-                        content_type=content_type,
-                        content=audio_data,
-                        name=f"bot_response{file_suffix}"
-                    )
-
-                    reply = MessageFactory.attachment(attachment)
-                    await turn_context.send_activity(reply)
-                    print(f"✅ Komprimierte Audio-Datei gesendet ({len(compressed_audio)} bytes)")
-
-                finally:
-                    try:
-                        os.unlink(temp_file.name)
-                    except:
-                        pass
-
-        except Exception as e:
-            print(f"❌ Komprimierte File-Audio Fehler: {e}")
-            await self._send_short_text_fallback(turn_context, text)
-
-    async def _send_short_text_fallback(self, turn_context: TurnContext, text: str):
-        """
-        Sicherer Text-Fallback wenn Audio komplett fehlschlägt
-        """
-        try:
-            # Text kürzen und säubern
-            clean_text = text.replace('[', '').replace(']', '').replace('(', '').replace(')', '')
-            clean_text = re.sub(r'[^\w\s\.\,\!\?\-]', '', clean_text)
-
-            if len(clean_text) > 100:
-                clean_text = clean_text[:97] + "..."
-
-            fallback_message = f"🔊 {clean_text}"
-            await turn_context.send_activity(MessageFactory.text(fallback_message))
-            print(f"📝 Text-Fallback gesendet: {len(fallback_message)} Zeichen")
-
-        except Exception as e:
-            print(f"❌ Text-Fallback fehlgeschlagen: {e}")
-            try:
-                await turn_context.send_activity(MessageFactory.text("🔊 Audio-Fehler"))
-            except:
-                print("❌ Kompletter Kommunikationsfehler")
-
-    async def _send_recognized_text_display(self, turn_context: TurnContext, recognized_text: str):
-        """
-        Zeigt erkannten Text als Audio-Bestätigung.
-        """
-        try:
-            # Statt Text-Display: Audio-Bestätigung was verstanden wurde
-            confirmation_text = f"Ich habe verstanden: {recognized_text}"
-
-            # Kurze Audio-Bestätigung senden
-            speech_text = self._convert_markdown_to_speech(confirmation_text)
-            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
-
-            if audio_bytes and len(audio_bytes) > 0:
-                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                attachment = Attachment(
-                    content_type="audio/wav",
-                    content_url=f"data:audio/wav;base64,{audio_base64}",
-                    name="recognition_confirmation.wav"
-                )
-                reply = MessageFactory.attachment(attachment)
-                await turn_context.send_activity(reply)
-                print("✅ Audio-Bestätigung der Spracherkennung gesendet")
-
-        except Exception as e:
-            print(f"❌ Fehler bei Audio-Bestätigung der Spracherkennung: {e}")
-
-    def _convert_markdown_to_speech(self, text: str) -> str:
-        """Konvertiert Markdown zu sprachfreundlichem Text"""
-        speech_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **bold** -> bold
-        speech_text = re.sub(r'\*([^*]+)\*', r'\1', speech_text)  # *italic* -> italic
-        speech_text = re.sub(r'•\s*', '', speech_text)  # Bullet points entfernen
-        speech_text = re.sub(r'\n+', ' ', speech_text)  # Zeilenumbrüche zu Leerzeichen
-        speech_text = re.sub(r'\s+', ' ', speech_text)  # Mehrfache Leerzeichen entfernen
+    def _convert_text_for_speech(self, text: str) -> str:
+        """Convert text to speech-friendly format"""
+        # Remove markdown
+        speech_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        speech_text = re.sub(r'\*([^*]+)\*', r'\1', speech_text)
+        speech_text = re.sub(r'•\s*', '', speech_text)
+        speech_text = re.sub(r'\n+', ' ', speech_text)
+        speech_text = re.sub(r'\s+', ' ', speech_text)
         return speech_text.strip()
 
-    async def _compress_for_bot_framework(self, audio_bytes: bytes) -> bytes:
-        """
-        Aggressive Kompression speziell für Bot Framework 256KB Limit
-        """
-        try:
-            import tempfile
-            import subprocess
-            import os
-
-            if not hasattr(self.audio_converter, 'ffmpeg_available') or not self.audio_converter.ffmpeg_available:
-                print("⚠️ FFmpeg nicht verfügbar - keine Kompression möglich")
-                return None
-
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as input_file:
-                input_file.write(audio_bytes)
-                input_file.flush()
-
-                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as output_file:
-                    try:
-                        # Sehr aggressive Kompression für Bot Framework
-                        cmd = [
-                            'ffmpeg', '-y', '-i', input_file.name,
-                            '-acodec', 'libmp3lame',
-                            '-b:a', '48k',  # Sehr niedrige Bitrate
-                            '-ac', '1',  # Mono
-                            '-ar', '22050',  # Niedrige Samplingrate
-                            '-q:a', '7',  # Niedrige Qualität aber verständlich
-                            '-f', 'mp3',
-                            output_file.name
-                        ]
-
-                        result = subprocess.run(cmd, capture_output=True, timeout=30)
-
-                        if result.returncode == 0:
-                            with open(output_file.name, 'rb') as f:
-                                compressed_data = f.read()
-
-                            compression_ratio = len(compressed_data) / len(audio_bytes) * 100
-                            print(
-                                f"🎵 Bot Framework Kompression: {len(audio_bytes)} → {len(compressed_data)} bytes ({compression_ratio:.1f}%)")
-
-                            return compressed_data
-                        else:
-                            print(f"❌ FFmpeg Kompression fehlgeschlagen: {result.stderr}")
-                            return None
-
-                    finally:
-                        try:
-                            os.unlink(output_file.name)
-                        except:
-                            pass
-
-            try:
-                os.unlink(input_file.name)
-            except:
-                pass
-
-        except Exception as e:
-            print(f"❌ Bot Framework Kompression fehlgeschlagen: {e}")
-            return None
-
-    async def _compress_for_bot_framework(self, audio_bytes: bytes) -> bytes:
-        """
-        Aggressive Kompression speziell für Bot Framework 256KB Limit
-        """
-        try:
-            import tempfile
-            import subprocess
-            import os
-
-            if not hasattr(self.audio_converter, 'ffmpeg_available') or not self.audio_converter.ffmpeg_available:
-                print("⚠️ FFmpeg nicht verfügbar - keine Kompression möglich")
-                return None
-
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as input_file:
-                input_file.write(audio_bytes)
-                input_file.flush()
-
-                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as output_file:
-                    try:
-                        # Sehr aggressive Kompression für Bot Framework
-                        cmd = [
-                            'ffmpeg', '-y', '-i', input_file.name,
-                            '-acodec', 'libmp3lame',
-                            '-b:a', '48k',  # Sehr niedrige Bitrate
-                            '-ac', '1',  # Mono
-                            '-ar', '22050',  # Niedrige Samplingrate
-                            '-q:a', '7',  # Niedrige Qualität aber verständlich
-                            '-f', 'mp3',
-                            output_file.name
-                        ]
-
-                        result = subprocess.run(cmd, capture_output=True, timeout=30)
-
-                        if result.returncode == 0:
-                            with open(output_file.name, 'rb') as f:
-                                compressed_data = f.read()
-
-                            compression_ratio = len(compressed_data) / len(audio_bytes) * 100
-                            print(
-                                f"🎵 Bot Framework Kompression: {len(audio_bytes)} → {len(compressed_data)} bytes ({compression_ratio:.1f}%)")
-
-                            return compressed_data
-                        else:
-                            print(f"❌ FFmpeg Kompression fehlgeschlagen: {result.stderr}")
-                            return None
-
-                    finally:
-                        try:
-                            os.unlink(output_file.name)
-                        except:
-                            pass
-
-            try:
-                os.unlink(input_file.name)
-            except:
-                pass
-
-        except Exception as e:
-            print(f"❌ Bot Framework Kompression fehlgeschlagen: {e}")
-            return None
-
-    async def _send_audio_file(self, turn_context: TurnContext, audio_bytes: bytes):
-        """
-        Sendet Audio-Bytes als Datei (muss unter 256KB sein)
-        """
-        try:
-            import tempfile
-            import os
-
-            # Doppelt prüfen
-            if len(audio_bytes) > 250000:
-                print(f"❌ Audio immer noch zu groß: {len(audio_bytes)} bytes")
-                await self._send_short_text_fallback(turn_context, "Audio zu groß für Übertragung")
-                return
-
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                temp_file.write(audio_bytes)
-                temp_file.flush()
-
-                try:
-                    with open(temp_file.name, 'rb') as audio_file:
-                        audio_data = audio_file.read()
-
-                    attachment = Attachment(
-                        content_type="audio/wav",
-                        content=audio_data,
-                        name="bot_response.wav"
-                    )
-
-                    reply = MessageFactory.attachment(attachment)
-                    await turn_context.send_activity(reply)
-                    print(f"✅ Audio-Datei gesendet ({len(audio_bytes)} bytes)")
-
-                finally:
-                    try:
-                        os.unlink(temp_file.name)
-                    except:
-                        pass
-
-        except Exception as e:
-            print(f"❌ File-Upload Fehler: {e}")
-            await self._send_short_text_fallback(turn_context, "Audio-Upload fehlgeschlagen")
-
-    # === DIALOG HANDLERS (Identisch zum Text-Bot, nur mit Audio-Output) ===
+    # === DIALOG HANDLERS WITH CLU INTEGRATION ===
 
     async def _handle_greeting(self, turn_context: TurnContext, user_profile, *args):
-        """Begrüßung (identisch zum Text-Bot)"""
-        greeting_text = self._convert_markdown_to_speech(SpeechBotMessages.WELCOME_MESSAGE)
-        await self._send_audio_response(turn_context, greeting_text)
+        """Handle greeting"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.WELCOME_MESSAGE)
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CONSENT)
 
     async def _handle_consent_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Consent-Behandlung (identisch zum Text-Bot)"""
+        """Handle consent with CLU integration"""
         user_input_lower = user_input.lower().strip()
 
         if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
-            consent_text = self._convert_markdown_to_speech(SpeechBotMessages.CONSENT_GRANTED)
-            await self._send_audio_response(turn_context, consent_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.CONSENT_GRANTED)
             user_profile['consent_given'] = True
             user_profile['consent_timestamp'] = datetime.now().isoformat()
             await self.user_profile_accessor.set(turn_context, user_profile)
             await self._ask_for_gender(turn_context)
 
         elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
-            denied_text = self._convert_markdown_to_speech(SpeechBotMessages.CONSENT_DENIED)
-            await self._send_audio_response(turn_context, denied_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.CONSENT_DENIED)
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
             await self.user_profile_accessor.set(turn_context, {
                 'consent_given': False,
@@ -830,21 +542,23 @@ class RegistrationAudioBot(ActivityHandler):
                 'registration_cancelled': True
             })
         else:
-            unclear_text = self._convert_markdown_to_speech(SpeechBotMessages.CONSENT_UNCLEAR)
-            await self._send_audio_response(turn_context, unclear_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.CONSENT_UNCLEAR)
 
     async def _ask_for_gender(self, turn_context: TurnContext):
-        """Geschlecht-Abfrage"""
-        gender_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['gender'])
-        await self._send_audio_response(turn_context, gender_text)
+        """Ask for gender"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['gender'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_GENDER)
 
     async def _handle_gender_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Geschlecht-Verarbeitung"""
-        user_input_lower = user_input.lower()
+        """Handle gender input with CLU"""
+        # Try CLU extraction first
+        gender_entity = await self._extract_entity_with_clu(user_input, 'Gender')
 
-        if user_input_lower in FieldConfig.GENDER_OPTIONS:
-            gender_value, gender_display = FieldConfig.GENDER_OPTIONS[user_input_lower]
+        # Use CLU result or fallback to direct matching
+        input_to_check = gender_entity.lower() if gender_entity else user_input.lower()
+
+        if input_to_check in FieldConfig.GENDER_OPTIONS:
+            gender_value, gender_display = FieldConfig.GENDER_OPTIONS[input_to_check]
             user_profile['gender'] = gender_value
             user_profile['gender_display'] = gender_display
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -853,22 +567,24 @@ class RegistrationAudioBot(ActivityHandler):
                                                             'gender', 'Geschlecht', gender_display):
                 return
 
-            await self._confirm_field(turn_context, "Geschlecht", gender_display, DialogState.CONFIRM_PREFIX + "gender")
+            await self._confirm_field(turn_context, "Geschlecht", gender_display,
+                                      DialogState.CONFIRM_PREFIX + "gender")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['gender'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['gender'])
 
     async def _ask_for_title(self, turn_context: TurnContext):
-        """Titel-Abfrage"""
-        title_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['title'])
-        await self._send_audio_response(turn_context, title_text)
+        """Ask for title"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['title'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_TITLE)
 
     async def _handle_title_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Titel-Verarbeitung"""
-        user_input_strip_lower = user_input.strip().lower()
+        """Handle title input with CLU"""
+        # Try CLU extraction
+        title_entity = await self._extract_entity_with_clu(user_input, 'Title')
 
-        if user_input_strip_lower in FieldConfig.NO_TITLE_KEYWORDS:
+        user_input_lower = (title_entity or user_input).strip().lower()
+
+        if user_input_lower in FieldConfig.NO_TITLE_KEYWORDS:
             user_profile['title'] = ''
             user_profile['title_display'] = "Kein Titel"
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -877,212 +593,281 @@ class RegistrationAudioBot(ActivityHandler):
                                                             'title', 'Titel', "Kein Titel"):
                 return
 
-            await self._confirm_field(turn_context, "Titel", "Kein Titel", DialogState.CONFIRM_PREFIX + "title")
-        elif user_input in FieldConfig.VALID_TITLES:
-            user_profile['title'] = user_input
-            user_profile['title_display'] = user_input
+            await self._confirm_field(turn_context, "Titel", "Kein Titel",
+                                      DialogState.CONFIRM_PREFIX + "title")
+        elif (title_entity or user_input) in FieldConfig.VALID_TITLES:
+            title_value = title_entity or user_input
+            user_profile['title'] = title_value
+            user_profile['title_display'] = title_value
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'title', 'Titel', user_input):
+                                                            'title', 'Titel', title_value):
                 return
 
-            await self._confirm_field(turn_context, "Titel", user_input, DialogState.CONFIRM_PREFIX + "title")
+            await self._confirm_field(turn_context, "Titel", title_value,
+                                      DialogState.CONFIRM_PREFIX + "title")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['title'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['title'])
 
     async def _ask_for_first_name(self, turn_context: TurnContext):
-        """Vorname-Abfrage"""
-        name_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['first_name'])
-        await self._send_audio_response(turn_context, name_text)
+        """Ask for first name"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['first_name'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_FIRST_NAME)
 
     async def _handle_first_name_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Vorname-Verarbeitung"""
-        if DataValidator.validate_name_part(user_input):
-            user_profile['first_name'] = user_input.strip()
+        """Handle first name input with CLU"""
+        # Try CLU extraction first
+        name_entity = await self._extract_entity_with_clu(user_input, 'Name')
+
+        name_to_validate = name_entity if name_entity and DataValidator.validate_name_part(name_entity) else user_input
+
+        if DataValidator.validate_name_part(name_to_validate):
+            user_profile['first_name'] = name_to_validate.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'first_name', 'Vorname', user_input):
+                                                            'first_name', 'Vorname', name_to_validate):
                 return
 
-            await self._confirm_field(turn_context, "Vorname", user_input, DialogState.CONFIRM_PREFIX + "first_name")
+            await self._confirm_field(turn_context, "Vorname", name_to_validate,
+                                      DialogState.CONFIRM_PREFIX + "first_name")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['first_name'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['first_name'])
 
     async def _ask_for_last_name(self, turn_context: TurnContext):
-        """Nachname-Abfrage"""
-        name_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['last_name'])
-        await self._send_audio_response(turn_context, name_text)
+        """Ask for last name"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['last_name'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_LAST_NAME)
 
     async def _handle_last_name_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Nachname-Verarbeitung"""
-        if DataValidator.validate_name_part(user_input):
-            user_profile['last_name'] = user_input.strip()
+        """Handle last name input with CLU"""
+        # Try CLU extraction first
+        name_entity = await self._extract_entity_with_clu(user_input, 'Name')
+
+        name_to_validate = name_entity if name_entity and DataValidator.validate_name_part(name_entity) else user_input
+
+        if DataValidator.validate_name_part(name_to_validate):
+            user_profile['last_name'] = name_to_validate.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'last_name', 'Nachname', user_input):
+                                                            'last_name', 'Nachname', name_to_validate):
                 return
 
-            await self._confirm_field(turn_context, "Nachname", user_input, DialogState.CONFIRM_PREFIX + "last_name")
+            await self._confirm_field(turn_context, "Nachname", name_to_validate,
+                                      DialogState.CONFIRM_PREFIX + "last_name")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['last_name'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['last_name'])
 
     async def _ask_for_birthdate(self, turn_context: TurnContext):
-        """Geburtsdatum-Abfrage"""
-        birthdate_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['birthdate'])
-        await self._send_audio_response(turn_context, birthdate_text)
+        """Ask for birthdate"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['birthdate'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_BIRTHDATE)
 
     async def _handle_birthdate_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Geburtsdatum-Verarbeitung mit Speech-Extraktion"""
-        # Versuche normale Validation und Speech-spezifische Extraktion
-        birthdate = DataValidator.validate_birthdate(user_input)
+        """Handle birthdate input with CLU"""
+        # Try CLU extraction first
+        date_entity = await self._extract_entity_with_clu(user_input, 'DateOfBirth')
+
+        # Try validation with CLU result first, then fallback to original input
+        birthdate = None
+        display_date = None
+
+        if date_entity:
+            birthdate = DataValidator.validate_birthdate(date_entity)
+            if birthdate:
+                display_date = date_entity
+
         if not birthdate:
-            birthdate = self._extract_birthdate_from_speech(user_input)
+            birthdate = DataValidator.validate_birthdate(user_input)
+            if birthdate:
+                display_date = user_input
 
         if birthdate:
             user_profile['birth_date'] = birthdate.strftime('%Y-%m-%d')
-            user_profile['birth_date_display'] = birthdate.strftime('%d.%m.%Y')
+            user_profile['birth_date_display'] = display_date
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'birth_date', 'Geburtsdatum',
-                                                            birthdate.strftime('%d.%m.%Y')):
+                                                            'birth_date', 'Geburtsdatum', display_date):
                 return
 
-            await self._confirm_field(turn_context, "Geburtsdatum", birthdate.strftime('%d.%m.%Y'),
+            await self._confirm_field(turn_context, "Geburtsdatum", display_date,
                                       DialogState.CONFIRM_PREFIX + "birthdate")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['birthdate'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['birthdate'])
 
     async def _ask_for_email(self, turn_context: TurnContext):
-        """E-Mail-Abfrage"""
-        email_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['email'])
-        await self._send_audio_response(turn_context, email_text)
+        """Ask for email"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['email'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_EMAIL)
 
     async def _handle_email_input(self, turn_context: TurnContext, user_profile, user_input):
-        """E-Mail-Verarbeitung mit Speech-Extraktion"""
-        email = self._extract_email_from_speech(user_input)
-        if not email:
-            email = user_input.strip()
+        """Handle email input with CLU"""
+        # Try CLU extraction first
+        email_entity = await self._extract_entity_with_clu(user_input, 'email')
 
-        if DataValidator.validate_email(email):
+        # Try validation with CLU result first, then fallback
+        email_to_validate = email_entity if email_entity and DataValidator.validate_email(email_entity) else user_input
+
+        if DataValidator.validate_email(email_to_validate):
             if not user_profile.get('correction_mode'):
-                if await self.customer_service.email_exists_in_db(email.strip().lower()):
-                    error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['email_exists'])
-                    await self._send_audio_response(turn_context, error_text)
+                if await self.customer_service.email_exists_in_db(email_to_validate.strip().lower()):
+                    await self._send_audio_response(turn_context,
+                                                    SpeechBotMessages.VALIDATION_ERRORS['email_exists'])
                     return
 
-            user_profile['email'] = email.strip().lower()
+            user_profile['email'] = email_to_validate.strip().lower()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'email', 'E-Mail', email):
+                                                            'email', 'E-Mail', email_to_validate):
                 return
 
-            await self._confirm_field(turn_context, "E-Mail", email, DialogState.CONFIRM_PREFIX + "email")
+            await self._confirm_field(turn_context, "E-Mail", email_to_validate,
+                                      DialogState.CONFIRM_PREFIX + "email")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['email'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['email'])
 
     async def _ask_for_phone(self, turn_context: TurnContext):
-        """Telefon-Abfrage"""
-        phone_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['phone'])
-        await self._send_audio_response(turn_context, phone_text)
+        """Ask for phone"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['phone'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_PHONE)
 
     async def _handle_phone_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Telefon-Verarbeitung"""
-        phone = self._extract_phone_from_speech(user_input)
-        phone_number_obj = DataValidator.validate_phone(phone or user_input)
+        """Handle phone input with CLU"""
+        # Try CLU extraction first
+        phone_entity = await self._extract_entity_with_clu(user_input, 'PhoneNumber')
+
+        phone_to_validate = phone_entity or user_input
+        phone_number_obj = DataValidator.validate_phone(phone_to_validate)
 
         if phone_number_obj:
             user_profile['telephone'] = phone_number_obj.as_e164
-            user_profile['telephone_display'] = phone or user_input
+            user_profile['telephone_display'] = phone_to_validate
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'telephone', 'Telefonnummer', phone or user_input):
+                                                            'telephone', 'Telefonnummer', phone_to_validate):
                 return
 
-            await self._confirm_field(turn_context, "Telefonnummer", phone or user_input,
+            await self._confirm_field(turn_context, "Telefonnummer", phone_to_validate,
                                       DialogState.CONFIRM_PREFIX + "phone")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['phone'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['phone'])
 
     async def _ask_for_street(self, turn_context: TurnContext):
-        """Straße-Abfrage"""
-        street_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['street'])
-        await self._send_audio_response(turn_context, street_text)
+        """Ask for street"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['street'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_STREET)
 
     async def _handle_street_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Straße-Verarbeitung"""
+        """Handle street input with CLU"""
+        # Try CLU extraction first
+        street_entity = await self._extract_entity_with_clu(user_input, 'StreetHousenumber')
+
+        if street_entity:
+            # Extract street name from StreetHousenumber entity
+            street_name = re.sub(r'\s*\d+[a-zA-Z]*\s*', street_entity).strip()
+
+            if len(street_name) >= 3 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', street_name):
+                user_profile['street_name'] = street_name
+
+            # Also extract house number if not already set
+            numbers = re.findall(r'\d+', street_entity)
+            if numbers and not user_profile.get('house_number'):
+                try:
+                    house_number = int(numbers[-1])
+                    if house_number > 0:
+                        user_profile['house_number'] = house_number
+                except ValueError:
+                    pass
+
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'street_name', 'Straße', street_name):
+                return
+
+            await self._confirm_field(turn_context, "Straße", street_name,
+                                      DialogState.CONFIRM_PREFIX + "street")
+            return
+
+        # Fallback to direct validation
         if len(user_input.strip()) >= 3 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', user_input.strip()):
             user_profile['street_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'street_name', 'Straße', user_input):
+            'street_name', 'Straße', user_input):
                 return
 
-            await self._confirm_field(turn_context, "Straße", user_input, DialogState.CONFIRM_PREFIX + "street")
+            await self._confirm_field(turn_context, "Straße", user_input,
+                                  DialogState.CONFIRM_PREFIX + "street")
+
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['street'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['street'])
+
 
     async def _ask_for_house_number(self, turn_context: TurnContext):
-        """Hausnummer-Abfrage"""
-        house_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['house_number'])
-        await self._send_audio_response(turn_context, house_text)
+        """Ask for house number"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['house_number'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_NUMBER)
 
+
     async def _handle_house_number_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Hausnummer-Verarbeitung"""
-        try:
-            house_number = int(user_input.strip())
-            if house_number > 0:
-                user_profile['house_number'] = house_number
-                await self.user_profile_accessor.set(turn_context, user_profile)
+        """Handle house number input with CLU"""
+        # Try CLU extraction first
+        house_entity = await self._extract_entity_with_clu(user_input, 'houseNumber')
 
-                if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                                'house_number', 'Hausnummer', str(house_number)):
-                    return
+        house_number = None
 
-                await self._confirm_field(turn_context, "Hausnummer", str(house_number),
-                                          DialogState.CONFIRM_PREFIX + "house_number")
-            else:
-                raise ValueError()
-        except ValueError:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['house_number'])
-            await self._send_audio_response(turn_context, error_text)
+        if house_entity:
+            # Extract numbers from house number entity
+            numbers = re.findall(r'\d+', house_entity)
+            if numbers:
+                try:
+                    house_number = int(numbers[-1])
+                except ValueError:
+                    pass
+
+        if not house_number:
+            # Fallback to direct parsing
+            try:
+                house_number = int(user_input.strip())
+            except ValueError:
+                pass
+
+        if house_number and house_number > 0:
+            user_profile['house_number'] = house_number
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'house_number', 'Hausnummer', str(house_number)):
+                return
+
+            await self._confirm_field(turn_context, "Hausnummer", str(house_number),
+                                      DialogState.CONFIRM_PREFIX + "house_number")
+        else:
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['house_number'])
+
 
     async def _ask_for_house_addition(self, turn_context: TurnContext):
-        """Hausnummernzusatz-Abfrage"""
-        addition_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['house_addition'])
-        await self._send_audio_response(turn_context, addition_text)
+        """Ask for house addition"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['house_addition'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_ADDITION)
 
+
     async def _handle_house_addition_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Hausnummernzusatz-Verarbeitung"""
+        """Handle house addition input"""
         if user_input.lower() in FieldConfig.NO_ADDITION_KEYWORDS:
             user_profile['house_number_addition'] = ""
             user_profile['house_addition_display'] = "Kein Zusatz"
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'house_number_addition', 'Hausnummernzusatz',
-                                                            "Kein Zusatz"):
+                                                            'house_number_addition', 'Hausnummernzusatz', "Kein Zusatz"):
                 return
 
             await self._confirm_field(turn_context, "Hausnummernzusatz", "Kein Zusatz",
@@ -1099,161 +884,190 @@ class RegistrationAudioBot(ActivityHandler):
             await self._confirm_field(turn_context, "Hausnummernzusatz", user_input,
                                       DialogState.CONFIRM_PREFIX + "house_addition")
 
+
     async def _ask_for_postal(self, turn_context: TurnContext):
-        """Postleitzahl-Abfrage"""
-        postal_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['postal'])
-        await self._send_audio_response(turn_context, postal_text)
+        """Ask for postal code"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['postal'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_POSTAL)
 
+
     async def _handle_postal_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Postleitzahl-Verarbeitung"""
-        if DataValidator.validate_postal_code(user_input):
-            user_profile['postal_code'] = user_input.strip()
+        """Handle postal code input with CLU"""
+        # Try CLU extraction first
+        zip_entity = await self._extract_entity_with_clu(user_input, 'ZipCode')
+
+        postal_to_validate = zip_entity or user_input
+        validated_postal = DataValidator.validate_postal_code(postal_to_validate)
+
+        if not validated_postal:
+            # Try enhanced validation
+            validated_postal = DataValidator.validate_postal_code_enhanced(postal_to_validate)
+
+        if validated_postal:
+            user_profile['postal_code'] = validated_postal
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'postal_code', 'Postleitzahl', user_input):
+                                                            'postal_code', 'Postleitzahl', validated_postal):
                 return
 
-            await self._confirm_field(turn_context, "Postleitzahl", user_input, DialogState.CONFIRM_PREFIX + "postal")
+            await self._confirm_field(turn_context, "Postleitzahl", validated_postal,
+                                      DialogState.CONFIRM_PREFIX + "postal")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['postal'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['postal'])
+
 
     async def _ask_for_city(self, turn_context: TurnContext):
-        """Stadt-Abfrage"""
-        city_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['city'])
-        await self._send_audio_response(turn_context, city_text)
+        """Ask for city"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['city'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CITY)
 
+
     async def _handle_city_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Stadt-Verarbeitung"""
-        if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', user_input.strip()):
-            user_profile['city'] = user_input.strip()
+        """Handle city input with CLU"""
+        # Try CLU extraction first
+        city_entity = await self._extract_entity_with_clu(user_input, 'City')
+
+        city_to_validate = city_entity or user_input
+
+        if len(city_to_validate.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', city_to_validate.strip()):
+            user_profile['city'] = city_to_validate.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'city', 'Ort', user_input):
+                                                            'city', 'Ort', city_to_validate):
                 return
 
-            await self._confirm_field(turn_context, "Ort", user_input, DialogState.CONFIRM_PREFIX + "city")
+            await self._confirm_field(turn_context, "Ort", city_to_validate,
+                                      DialogState.CONFIRM_PREFIX + "city")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['city'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['city'])
+
 
     async def _ask_for_country(self, turn_context: TurnContext):
-        """Land-Abfrage"""
-        country_text = self._convert_markdown_to_speech(SpeechBotMessages.FIELD_PROMPTS['country'])
-        await self._send_audio_response(turn_context, country_text)
+        """Ask for country"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['country'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_COUNTRY)
 
+
     async def _handle_country_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Land-Verarbeitung"""
-        if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', user_input.strip()):
-            user_profile['country_name'] = user_input.strip()
+        """Handle country input with CLU"""
+        # Try CLU extraction first
+        country_entity = await self._extract_entity_with_clu(user_input, 'countryName')
+
+        country_to_validate = country_entity or user_input
+
+        if len(country_to_validate.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', country_to_validate.strip()):
+            user_profile['country_name'] = country_to_validate.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'country_name', 'Land', user_input):
+                                                            'country_name', 'Land', country_to_validate):
                 return
 
-            await self._confirm_field(turn_context, "Land", user_input, DialogState.CONFIRM_PREFIX + "country")
+            await self._confirm_field(turn_context, "Land", country_to_validate,
+                                      DialogState.CONFIRM_PREFIX + "country")
         else:
-            error_text = self._convert_markdown_to_speech(SpeechBotMessages.VALIDATION_ERRORS['country'])
-            await self._send_audio_response(turn_context, error_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.VALIDATION_ERRORS['country'])
 
-    # === CONFIRMATION UND FINAL HANDLING ===
+
+    # === CONFIRMATION AND FINAL HANDLING ===
 
     async def _confirm_field(self, turn_context: TurnContext, field_name: str, value: str, confirmation_state: str):
-        """Feld-Bestätigung (Audio-Version)"""
+        """Send field confirmation"""
         confirmation_message = SpeechBotMessages.confirmation_prompt(field_name, value)
-        confirmation_text = self._convert_markdown_to_speech(confirmation_message)
-        await self._send_audio_response(turn_context, confirmation_text)
+        await self._send_audio_response(turn_context, confirmation_message)
         await self.dialog_state_accessor.set(turn_context, confirmation_state)
 
+
     async def _handle_confirmation(self, turn_context: TurnContext, user_profile, user_input, dialog_state):
-        """Bestätigung verarbeiten (identisch zum Text-Bot)"""
+        """Handle confirmation responses"""
         user_input_lower = user_input.lower()
         confirmed = user_input_lower in FieldConfig.CONFIRMATION_YES
         rejected = user_input_lower in FieldConfig.CONFIRMATION_NO
 
         if confirmed:
+            # Find next step in dialog flow
             found_next_step = False
             for conf_state, next_ask_func, _ in self.dialog_flow:
                 if dialog_state == conf_state:
                     await next_ask_func(turn_context)
                     found_next_step = True
                     break
+
             if not found_next_step and dialog_state == DialogState.CONFIRM_PREFIX + "country":
                 await self._show_final_summary(turn_context)
+
         elif rejected:
+            # Find correction step
             found_correction_step = False
             for conf_state, _, correction_ask_func in self.dialog_flow:
                 if dialog_state == conf_state:
-                    rejected_text = self._convert_markdown_to_speech(SpeechBotMessages.CONFIRMATION_REJECTED)
-                    await self._send_audio_response(turn_context, rejected_text)
+                    await self._send_audio_response(turn_context, SpeechBotMessages.CONFIRMATION_REJECTED)
                     await correction_ask_func(turn_context)
                     found_correction_step = True
                     break
+
             if not found_correction_step:
                 await self._send_audio_response(turn_context,
-                    "Entschuldigung, ich kann diesen Schritt nicht korrigieren.")
+                                                "Entschuldigung, ich kann diesen Schritt nicht korrigieren.")
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
         else:
-            unclear_text = self._convert_markdown_to_speech(SpeechBotMessages.CONFIRMATION_UNCLEAR)
-            await self._send_audio_response(turn_context, unclear_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.CONFIRMATION_UNCLEAR)
+
 
     async def _show_final_summary(self, turn_context: TurnContext):
-        """Finale Zusammenfassung (Audio-Version)"""
+        """Show final summary"""
         user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
         summary_message = SpeechBotMessages.final_summary(user_profile)
-        summary_text = self._convert_markdown_to_speech(summary_message)
-        await self._send_audio_response(turn_context, summary_text)
+        await self._send_audio_response(turn_context, summary_message)
         await self.dialog_state_accessor.set(turn_context, DialogState.FINAL_CONFIRMATION)
 
+
     async def _handle_final_confirmation(self, turn_context: TurnContext, user_profile, user_input):
-        """Finale Bestätigung (identisch zum Text-Bot)"""
+        """Handle final confirmation"""
         user_input_lower = user_input.lower().strip()
 
         if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
-            save_text = self._convert_markdown_to_speech(SpeechBotMessages.SAVE_IN_PROGRESS)
-            await self._send_audio_response(turn_context, save_text)
+            # Save data
+            await self._send_audio_response(turn_context, SpeechBotMessages.SAVE_IN_PROGRESS)
 
             success = await self._save_customer_data(user_profile)
 
             if success:
-                success_text = self._convert_markdown_to_speech(SpeechBotMessages.REGISTRATION_SUCCESS)
-                await self._send_audio_response(turn_context, success_text)
+                await self._send_audio_response(turn_context, SpeechBotMessages.REGISTRATION_SUCCESS)
                 await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
                 await self.user_profile_accessor.set(turn_context, {
                     'registration_completed': True,
                     'completion_timestamp': datetime.now().isoformat()
                 })
             else:
-                error_text = self._convert_markdown_to_speech(SpeechBotMessages.SAVE_ERROR)
-                await self._send_audio_response(turn_context, error_text)
+                await self._send_audio_response(turn_context, SpeechBotMessages.SAVE_ERROR)
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
 
         elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
+            # Start correction process
             await self._start_correction_process(turn_context, user_profile)
 
         elif any(response in user_input_lower for response in FieldConfig.RESTART_KEYWORDS):
+            # Complete restart
             await self._handle_restart_request(turn_context)
 
         else:
-            unclear_text = self._convert_markdown_to_speech(SpeechBotMessages.FINAL_CONFIRMATION_UNCLEAR)
-            await self._send_audio_response(turn_context, unclear_text)
+            # Unclear answer
+            await self._send_audio_response(turn_context, SpeechBotMessages.FINAL_CONFIRMATION_UNCLEAR)
+
 
     # === CORRECTION HANDLING ===
 
     async def _start_correction_process(self, turn_context: TurnContext, user_profile):
-        """Korrektur-Prozess starten (Audio-Version)"""
-        correction_text = self._convert_markdown_to_speech(SpeechBotMessages.CORRECTION_OPTIONS)
-        await self._send_audio_response(turn_context, correction_text)
+        """Start correction process"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.CORRECTION_OPTIONS)
         await self.dialog_state_accessor.set(turn_context, "correction_selection")
 
+
     async def _handle_correction_selection(self, turn_context: TurnContext, user_profile, user_input):
-        """Korrektur-Auswahl verarbeiten (identisch zum Text-Bot)"""
+        """Handle correction selection"""
         user_input_lower = user_input.lower().strip()
 
         # Handle special commands
@@ -1292,8 +1106,7 @@ class RegistrationAudioBot(ActivityHandler):
             field_display = FieldConfig.FIELD_DISPLAY_NAMES.get(target_field, "das gewählte Feld")
 
             correction_message = SpeechBotMessages.correction_start(field_display)
-            correction_text = self._convert_markdown_to_speech(correction_message)
-            await self._send_audio_response(turn_context, correction_text)
+            await self._send_audio_response(turn_context, correction_message)
 
             await self.dialog_state_accessor.set(turn_context, target_state)
             user_profile['correction_mode'] = True
@@ -1301,16 +1114,15 @@ class RegistrationAudioBot(ActivityHandler):
             await self.user_profile_accessor.set(turn_context, user_profile)
 
         else:
-            not_understood_text = self._convert_markdown_to_speech(SpeechBotMessages.CORRECTION_NOT_UNDERSTOOD)
-            await self._send_audio_response(turn_context, not_understood_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.CORRECTION_NOT_UNDERSTOOD)
+
 
     async def _check_correction_mode_and_handle(self, turn_context: TurnContext, user_profile,
                                                 field_name, field_display, new_value):
-        """Korrektur-Modus behandeln (identisch zum Text-Bot)"""
+        """Handle correction mode"""
         if user_profile.get('correction_mode'):
             correction_message = SpeechBotMessages.correction_success(field_display, new_value)
-            correction_text = self._convert_markdown_to_speech(correction_message)
-            await self._send_audio_response(turn_context, correction_text)
+            await self._send_audio_response(turn_context, correction_message)
 
             user_profile['correction_mode'] = False
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -1320,118 +1132,62 @@ class RegistrationAudioBot(ActivityHandler):
 
         return False
 
+
     # === STATE HANDLING ===
 
     async def _handle_completed_state(self, turn_context: TurnContext, user_profile, user_input):
-        """Completed State (Audio-Version)"""
+        """Handle completed state"""
         user_input_lower = user_input.lower()
 
         if any(keyword in user_input_lower for keyword in FieldConfig.RESTART_KEYWORDS):
             if user_profile.get('registration_cancelled'):
-                restart_text = self._convert_markdown_to_speech(SpeechBotMessages.RESTART_NEW_REGISTRATION)
-                await self._send_audio_response(turn_context, restart_text)
+                await self._send_audio_response(turn_context, SpeechBotMessages.RESTART_NEW_REGISTRATION)
 
                 await self.user_profile_accessor.set(turn_context, {})
                 await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
                 await self._handle_greeting(turn_context, {})
 
             elif user_profile.get('consent_given') and not user_profile.get('registration_cancelled'):
-                already_text = self._convert_markdown_to_speech(SpeechBotMessages.ALREADY_REGISTERED)
-                await self._send_audio_response(turn_context, already_text)
+                await self._send_audio_response(turn_context, SpeechBotMessages.ALREADY_REGISTERED)
         else:
             if user_profile.get('registration_cancelled'):
-                help_text = self._convert_markdown_to_speech(SpeechBotMessages.REGISTRATION_CANCELLED_HELP)
-                await self._send_audio_response(turn_context, help_text)
+                await self._send_audio_response(turn_context, SpeechBotMessages.REGISTRATION_CANCELLED_HELP)
             else:
-                help_text = self._convert_markdown_to_speech(SpeechBotMessages.ALREADY_COMPLETED_HELP)
-                await self._send_audio_response(turn_context, help_text)
+                await self._send_audio_response(turn_context, SpeechBotMessages.ALREADY_COMPLETED_HELP)
+
 
     async def _handle_unknown_state(self, turn_context: TurnContext, user_profile, user_input):
-        """Unknown State (Audio-Version)"""
+        """Handle unknown state"""
         user_input_lower = user_input.lower()
 
         if any(keyword in user_input_lower for keyword in FieldConfig.RESTART_KEYWORDS):
-            restart_text = self._convert_markdown_to_speech(SpeechBotMessages.UNKNOWN_STATE_RESTART)
-            await self._send_audio_response(turn_context, restart_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.UNKNOWN_STATE_RESTART)
 
             await self.user_profile_accessor.set(turn_context, {})
             await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
             await self._handle_greeting(turn_context, {})
         else:
-            confusion_text = self._convert_markdown_to_speech(SpeechBotMessages.UNKNOWN_STATE_CONFUSION)
-            await self._send_audio_response(turn_context, confusion_text)
+            await self._send_audio_response(turn_context, SpeechBotMessages.UNKNOWN_STATE_CONFUSION)
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
 
+
     async def _handle_restart_request(self, turn_context: TurnContext):
-        """Restart Request (Audio-Version)"""
-        restart_text = self._convert_markdown_to_speech(SpeechBotMessages.RESTART_MESSAGE)
-        await self._send_audio_response(turn_context, restart_text)
+        """Handle restart request"""
+        await self._send_audio_response(turn_context, SpeechBotMessages.RESTART_MESSAGE)
 
         await self.user_profile_accessor.set(turn_context, {})
         await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
         await self._handle_greeting(turn_context, {})
 
-    # === SPEECH-SPEZIFISCHE EXTRAKTION ===
-
-    def _extract_birthdate_from_speech(self, text: str) -> Optional[datetime]:
-        """Extrahiert Geburtsdatum aus gesprochenem Text"""
-        try:
-            date_patterns = [
-                r'(\d{1,2})\.(\d{1,2})\.(\d{4})',
-                r'(\d{1,2}) (\d{1,2}) (\d{4})',
-                r'(\d{1,2})\s*punkt\s*(\d{1,2})\s*punkt\s*(\d{4})',
-            ]
-
-            for pattern in date_patterns:
-                match = re.search(pattern, text)
-                if match:
-                    day, month, year = map(int, match.groups())
-                    if 1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2010:
-                        return datetime(year, month, day)
-            return None
-        except:
-            return None
-
-    def _extract_email_from_speech(self, text: str) -> Optional[str]:
-        """Extrahiert E-Mail aus gesprochenem Text"""
-        speech_corrections = {
-            ' at ': '@', ' ät ': '@', ' punkt ': '.', ' dot ': '.',
-            ' minus ': '-', ' unterstrich ': '_',
-        }
-
-        corrected_text = text.lower()
-        for speech_form, correct_form in speech_corrections.items():
-            corrected_text = corrected_text.replace(speech_form, correct_form)
-
-        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        match = re.search(email_pattern, corrected_text)
-        return match.group() if match else None
-
-    def _extract_phone_from_speech(self, text: str) -> Optional[str]:
-        """Extrahiert Telefonnummer aus gesprochenem Text"""
-        digits = re.sub(r'[^\d+]', '', text)
-
-        speech_corrections = {
-            'null': '0', 'eins': '1', 'zwei': '2', 'drei': '3', 'vier': '4',
-            'fünf': '5', 'sechs': '6', 'sieben': '7', 'acht': '8', 'neun': '9',
-        }
-
-        corrected_text = text.lower()
-        for word, digit in speech_corrections.items():
-            corrected_text = corrected_text.replace(word, digit)
-
-        corrected_digits = re.sub(r'[^\d+]', '', corrected_text)
-        return corrected_digits if len(corrected_digits) >= 10 else digits if len(digits) >= 10 else None
 
     # === ERROR HANDLING ===
 
     async def _handle_stt_error(self, turn_context: TurnContext, error_msg: str):
-        """STT-Fehlerbehandlung"""
+        """Handle STT errors"""
         error_responses = {
-            "INVALID_HEADER": "Das Audio-Format konnte trotz Konvertierung nicht verarbeitet werden.",
-            "0xa": "Die Audio-Datei scheint beschädigt zu sein.",
-            "NoMatch": "Ich konnte keine Sprache erkennen. Sprechen Sie bitte deutlicher.",
-            "Canceled": "Die Spracherkennung wurde unterbrochen.",
+            "invalid_header": "Das Audio-Format konnte nicht verarbeitet werden.",
+            "nomatch": "Ich konnte keine Sprache erkennen. Sprechen Sie bitte deutlicher.",
+            "canceled": "Die Spracherkennung wurde unterbrochen.",
             "timeout": "Die Audio-Datei ist zu lang. Bitte senden Sie eine kürzere Nachricht."
         }
 
@@ -1443,17 +1199,19 @@ class RegistrationAudioBot(ActivityHandler):
 
         await self._send_audio_response(turn_context, response)
 
+
     # === UTILITY METHODS ===
 
     async def _save_customer_data(self, user_profile: dict) -> bool:
-        """Speichert Kundendaten (identisch zum Text-Bot)"""
+        """Save customer data"""
         try:
             return await self.customer_service.store_data_db(user_profile.copy())
         except Exception as e:
-            print(f"❌ Fehler beim Speichern: {e}")
+            print(f"❌ Save error: {e}")
             return False
 
+
     async def _save_state(self, turn_context: TurnContext):
-        """Speichert Bot-States (identisch zum Text-Bot)"""
+        """Save bot state"""
         await self.conversation_state.save_changes(turn_context)
         await self.user_state.save_changes(turn_context)

@@ -72,7 +72,7 @@ class FFmpegAudioConverter:
                 with open(output_path, 'rb') as f:
                     wav_bytes = f.read()
 
-                print(f"✅ FFmpeg Konvertierung erfolgreich:")
+                print(f" FFmpeg Konvertierung erfolgreich:")
                 print(f"   Input: {len(audio_bytes)} bytes")
                 print(f"   Output: {len(wav_bytes)} bytes")
                 print(f"   Komprimierung: {len(wav_bytes) / len(audio_bytes):.2f}x")
@@ -80,15 +80,15 @@ class FFmpegAudioConverter:
                 return wav_bytes
             else:
                 error_msg = stderr.decode('utf-8', errors='ignore')
-                print(f"❌ FFmpeg Error (Code {process.returncode}):")
+                print(f"FFmpeg Error (Code {process.returncode}):")
                 print(f"   Stderr: {error_msg}")
                 return None
 
         except asyncio.TimeoutError:
-            print("❌ FFmpeg Timeout - File was to big")
+            print("FFmpeg Timeout - File was to big")
             return None
         except Exception as e:
-            print(f"❌ FFmpe conversion error: {e}")
+            print(f"FFmpe conversion error: {e}")
             return None
         finally:
             # delete temporary file
@@ -141,14 +141,131 @@ class FFmpegAudioConverter:
 
                 return audio_info
             else:
-                print(f"❌ ffprobe Fehler: {result.stderr}")
+                print(f"ffprobe Fehler: {result.stderr}")
                 return {}
 
         except Exception as e:
-            print(f"❌ Audio-Info Extraktion fehlgeschlagen: {e}")
+            print(f"Audio-Info Extraktion fehlgeschlagen: {e}")
             return {}
         finally:
             try:
                 os.unlink(temp_path)
             except OSError:
                 pass
+
+    async def convert_to_ogg(self, audio_bytes: bytes) :
+        """Convert audio to OGG format for better Telegram compatibility"""
+        try:
+            import tempfile
+            import subprocess
+            import os
+
+            if not self.ffmpeg_available:
+                print(" FFmpeg not available for OGG conversion")
+                return None
+
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as input_file:
+                input_file.write(audio_bytes)
+                input_file.flush()
+
+                with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as output_file:
+                    try:
+                        # Convert to OGG with good quality for voice
+                        cmd = [
+                            'ffmpeg', '-y', '-i', input_file.name,
+                            '-acodec', 'libvorbis',
+                            '-b:a', '64k',  # Good quality for speech
+                            '-ac', '1',  # Mono
+                            '-ar', '22050',  # Good sample rate for speech
+                            '-f', 'ogg',
+                            output_file.name
+                        ]
+
+                        result = subprocess.run(cmd, capture_output=True, timeout=30)
+
+                        if result.returncode == 0:
+                            with open(output_file.name, 'rb') as f:
+                                ogg_data = f.read()
+
+                            compression_ratio = len(ogg_data) / len(audio_bytes) * 100
+                            print(
+                                f"OGG conversion: {len(audio_bytes)} → {len(ogg_data)} bytes ({compression_ratio:.1f}%)")
+
+                            return ogg_data
+                        else:
+                            print(f"FFmpeg OGG conversion failed: {result.stderr}")
+                            return None
+
+                    finally:
+                        try:
+                            os.unlink(output_file.name)
+                        except:
+                            pass
+
+            try:
+                os.unlink(input_file.name)
+            except:
+                pass
+
+        except Exception as e:
+            print(f"OGG conversion failed: {e}")
+            return None
+
+    async def convert_to_mp3_compressed(self, audio_bytes: bytes, bitrate: str = "32k"):
+        """Convert audio to highly compressed MP3 for size limits"""
+        try:
+            import tempfile
+            import subprocess
+            import os
+
+            if not self.ffmpeg_available:
+                return None
+
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as input_file:
+                input_file.write(audio_bytes)
+                input_file.flush()
+
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as output_file:
+                    try:
+                        # Highly compressed MP3 for size constraints
+                        cmd = [
+                            'ffmpeg', '-y', '-i', input_file.name,
+                            '-acodec', 'libmp3lame',
+                            '-b:a', bitrate,
+                            '-ac', '1',  # Mono
+                            '-ar', '16000',  # Lower sample rate
+                            '-q:a', '9',  # Lower quality but smaller size
+                            '-f', 'mp3',
+                            output_file.name
+                        ]
+
+                        result = subprocess.run(cmd, capture_output=True, timeout=30)
+
+                        if result.returncode == 0:
+                            with open(output_file.name, 'rb') as f:
+                                mp3_data = f.read()
+
+                            compression_ratio = len(mp3_data) / len(audio_bytes) * 100
+                            print(
+                                f"MP3 compression: {len(audio_bytes)} → {len(mp3_data)} bytes ({compression_ratio:.1f}%)")
+
+                            return mp3_data
+                        else:
+                            print(f"FFmpeg MP3 conversion failed: {result.stderr}")
+                            return None
+
+                    finally:
+                        try:
+                            os.unlink(output_file.name)
+                        except:
+                            pass
+
+            try:
+                os.unlink(input_file.name)
+            except:
+                pass
+
+        except Exception as e:
+            print(f"MP3 compression failed: {e}")
+            return None
+
