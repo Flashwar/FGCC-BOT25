@@ -22,8 +22,22 @@ class DataValidator:
         try:
             date_obj = datetime.strptime(date_str, "%d.%m.%Y").date()
             today = datetime.now().date()
-            if date_obj < today and (today.year - date_obj.year) < 150:
-                return date_obj
+
+            # Check if date is not in the future
+            if date_obj >= today:
+                return None
+
+            # Calculate age in years
+            age_years = today.year - date_obj.year
+            if date_obj.month > today.month or (date_obj.month == today.month and date_obj.day > today.day):
+                age_years -= 1
+
+            # Check age bounds: must be between 16 and 120 years
+            if age_years < 16 or age_years > 120:
+                return None
+
+            return date_obj
+
         except ValueError:
             pass
         return None
@@ -51,7 +65,34 @@ class DataValidator:
     @staticmethod
     def validate_postal_code(postal_code: str):
         # Validates German postal code (exactly 5 digits)
-        return bool(re.match(r'^\d{5}$', postal_code))
+        if not postal_code:
+            return None
+
+            # Remove whitespace and ensure it's a string
+        postal_code = str(postal_code).strip()
+
+        # German postal codes: 5 digits, range 01001-99998
+        if not re.match(r'^\d{5}$', postal_code):
+            return None
+
+        postal_int = int(postal_code)
+
+        # Valid German postal code range
+        if postal_int < 1001 or postal_int > 99998:
+            return None
+
+        # Exclude invalid ranges (these don't exist in Germany)
+        invalid_ranges = [
+            (62000, 62999),
+            (77000, 77999),
+            (5000, 5999),
+        ]
+
+        for start, end in invalid_ranges:
+            if start <= postal_int <= end:
+                return None
+
+        return postal_code
 
     @staticmethod
     def validate_house_number(house_number: str):

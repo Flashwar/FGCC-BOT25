@@ -6,6 +6,8 @@ from injector import inject
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, ConversationState, UserState
 from botbuilder.schema import ChannelAccount
 
+from Bot.azure_service.luis_service import AzureCLUService
+from FCCSemesterAufgabe.settings import isDocker
 from .dialogstate import DialogState
 from .validators import DataValidator
 from .services import CustomerService
@@ -20,6 +22,12 @@ class RegistrationTextBot(ActivityHandler):
         self.customer_service = customer_service
         self.conversation_state = conversation_state
         self.user_state = user_state
+
+        if isDocker:
+            self.clu_service = None
+        else:
+            print("🔧 Versuche CLU Service zu initialisieren...")
+            self.clu_service = AzureCLUService()
 
         # Accessors for storing and retrieving user profile and dialogue state data
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
@@ -182,6 +190,31 @@ class RegistrationTextBot(ActivityHandler):
         # Start new registration
         await self._handle_greeting(turn_context, {})
 
+    async def _extract_specific_entity(self, user_input: str, entity_type: str):
+        #  Sends input to CLU and searches for a specific entity type
+
+        if not self.clu_service:
+            return None
+
+        try:
+            entities = await self.clu_service.get_entities(text=user_input)
+            print(f"🔧 CLU Entities für {entity_type}: {entities}")
+
+            for entity in entities:
+                entity_name = entity.get('name', '')
+                entity_text = entity.get('text', '')
+
+                if entity_name == entity_type:
+                    print(f"✅ {entity_type} gefunden: '{entity_text}'")
+                    return entity_text
+
+            print(f"❌ Keine {entity_type} Entity gefunden")
+            return None
+
+        except Exception as e:
+            print(f"CLU {entity_type} Extraktion Fehler: {e}")
+            return None
+
     async def _check_correction_mode_and_handle(self, turn_context: TurnContext, user_profile,
                                                 field_name, field_display, new_value):
         # Method to handle post-input logic when in correction mode
@@ -240,7 +273,6 @@ class RegistrationTextBot(ActivityHandler):
             # Unknown state + no restart keywords
             await turn_context.send_activity(MessageFactory.text(BotMessages.UNKNOWN_STATE_CONFUSION))
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
-
 
     async def on_members_added_activity(self, members_added: [ChannelAccount], turn_context: TurnContext):
         """Called when members are added to the conversation."""
@@ -350,7 +382,20 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_FIRST_NAME)
 
     async def _handle_first_name_input(self, turn_context: TurnContext, user_profile, user_input):
-        # validate user input
+        # validate user name
+        name_entity = await self._extract_specific_entity(user_input, 'Name')
+        if name_entity and DataValidator.validate_name_part(name_entity):
+            user_profile['first_name'] = name_entity.strip()
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'first_name', 'Vorname', name_entity):
+                return
+
+            await self._confirm_field(turn_context, "Vorname", name_entity, DialogState.CONFIRM_PREFIX + "first_name")
+            return
+
+        # Fallback: Try normal validation
         if DataValidator.validate_name_part(user_input):
             user_profile['first_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -360,8 +405,10 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "Vorname", user_input, DialogState.CONFIRM_PREFIX + "first_name")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['first_name']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['first_name']))
 
     async def _ask_for_last_name(self, turn_context: TurnContext):
         # Asks the user for their last name
@@ -370,6 +417,19 @@ class RegistrationTextBot(ActivityHandler):
 
     async def _handle_last_name_input(self, turn_context: TurnContext, user_profile, user_input):
         #  Processes the user's input for the last name
+        name_entity = await self._extract_specific_entity(user_input, 'Name')
+        if name_entity and DataValidator.validate_name_part(name_entity):
+            user_profile['last_name'] = name_entity.strip()
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'last_name', 'Nachname', name_entity):
+                return
+
+            await self._confirm_field(turn_context, "Nachname", name_entity, DialogState.CONFIRM_PREFIX + "last_name")
+            return
+
+        # Fallback: Try normal validation
         if DataValidator.validate_name_part(user_input):
             user_profile['last_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -379,8 +439,10 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "Nachname", user_input, DialogState.CONFIRM_PREFIX + "last_name")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['last_name']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['last_name']))
 
     async def _ask_for_birthdate(self, turn_context: TurnContext):
         # Asks the user for their birthdate in  TT.MM.JJJJ format
@@ -390,6 +452,23 @@ class RegistrationTextBot(ActivityHandler):
     async def _handle_birthdate_input(self, turn_context: TurnContext, user_profile, user_input):
         # Processes the user's input for birthdate
         # and validate them
+        date_entity = await self._extract_specific_entity(user_input, 'DateOfBirth')
+        if date_entity:
+            birthdate = DataValidator.validate_birthdate(date_entity)
+            if birthdate:
+                user_profile['birth_date'] = birthdate.strftime('%Y-%m-%d')
+                user_profile['birth_date_display'] = date_entity
+                await self.user_profile_accessor.set(turn_context, user_profile)
+
+                if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                'birth_date', 'Geburtsdatum', date_entity):
+                    return
+
+                await self._confirm_field(turn_context, "Geburtsdatum", date_entity,
+                                          DialogState.CONFIRM_PREFIX + "birthdate")
+                return
+
+        # Fallback: Try normal validation
         birthdate = DataValidator.validate_birthdate(user_input)
         if birthdate:
             user_profile['birth_date'] = birthdate.strftime('%Y-%m-%d')
@@ -402,8 +481,10 @@ class RegistrationTextBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Geburtsdatum", user_input,
                                       DialogState.CONFIRM_PREFIX + "birthdate")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['birthdate']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['birthdate']))
 
     async def _ask_for_email(self, turn_context: TurnContext):
         # Asks the user for their email address
@@ -413,6 +494,24 @@ class RegistrationTextBot(ActivityHandler):
     async def _handle_email_input(self, turn_context: TurnContext, user_profile, user_input):
         # Processes the user's input for the email address
         # check if the email is already in use
+        email_entity = await self._extract_specific_entity(user_input, 'email')
+        if email_entity and DataValidator.validate_email(email_entity):
+            if not user_profile.get('correction_mode'):
+                if await self.customer_service.email_exists_in_db(email_entity.strip().lower()):
+                    await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['email_exists']))
+                    return
+
+            user_profile['email'] = email_entity.strip().lower()
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'email', 'E-Mail', email_entity):
+                return
+
+            await self._confirm_field(turn_context, "E-Mail", email_entity, DialogState.CONFIRM_PREFIX + "email")
+            return
+
+        # Fallback: Try normal validation
         if DataValidator.validate_email(user_input):
             if not user_profile.get('correction_mode'):
                 if await self.customer_service.email_exists_in_db(user_input.strip().lower()):
@@ -427,8 +526,10 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "E-Mail", user_input, DialogState.CONFIRM_PREFIX + "email")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['email']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['email']))
 
     async def _ask_for_phone(self, turn_context: TurnContext):
         # ask for the phone number
@@ -437,6 +538,23 @@ class RegistrationTextBot(ActivityHandler):
 
     async def _handle_phone_input(self, turn_context: TurnContext, user_profile, user_input):
         # Processes the user's input for the phone number
+        phone_entity = await self._extract_specific_entity(user_input, 'PhoneNumber')
+        if phone_entity:
+            phone_number_obj = DataValidator.validate_phone(phone_entity)
+            if phone_number_obj:
+                user_profile['telephone'] = phone_number_obj.as_e164
+                user_profile['telephone_display'] = phone_entity
+                await self.user_profile_accessor.set(turn_context, user_profile)
+
+                if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                'telephone', 'Telefonnummer', phone_entity):
+                    return
+
+                await self._confirm_field(turn_context, "Telefonnummer", phone_entity,
+                                          DialogState.CONFIRM_PREFIX + "phone")
+                return
+
+        # Fallback: Try normal validation
         phone_number_obj = DataValidator.validate_phone(user_input)
         if phone_number_obj:
             user_profile['telephone'] = phone_number_obj.as_e164
@@ -448,16 +566,47 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "Telefonnummer", user_input, DialogState.CONFIRM_PREFIX + "phone")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['phone']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['phone']))
 
     async def _ask_for_street(self, turn_context: TurnContext):
         # Asks the user for their street name
         await turn_context.send_activity(MessageFactory.text(BotMessages.FIELD_PROMPTS['street']))
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_STREET)
 
+    # MODIFIED METHOD: Street input with CLU first
     async def _handle_street_input(self, turn_context: TurnContext, user_profile, user_input):
-        # Processes the user's input for the street name
+        # First: Try CLU for StreetHousenumber entity
+        street_entity = await self._extract_specific_entity(user_input, 'StreetHousenumber')
+        if street_entity:
+            # Remove numbers and common additions to get street name
+            street_name = re.sub(r'\s*\d+[a-zA-Z]*\s*$', '', street_entity).strip()
+
+            if len(street_name) >= 3 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', street_name):
+                user_profile['street_name'] = street_name
+
+                # Also extract and save house number if not already set
+                numbers = re.findall(r'\d+', street_entity)
+                if numbers and not user_profile.get('house_number'):
+                    try:
+                        house_number = int(numbers[-1])
+                        if house_number > 0:
+                            user_profile['house_number'] = house_number
+                    except ValueError:
+                        pass
+
+                await self.user_profile_accessor.set(turn_context, user_profile)
+
+                if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                'street_name', 'Straße', street_name):
+                    return
+
+                await self._confirm_field(turn_context, "Straße", street_name, DialogState.CONFIRM_PREFIX + "street")
+                return
+
+        # Fallback: Try normal validation
         if len(user_input.strip()) >= 3 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', user_input.strip()):
             user_profile['street_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
@@ -467,8 +616,10 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "Straße", user_input, DialogState.CONFIRM_PREFIX + "street")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['street']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['street']))
 
     async def _ask_for_house_number(self, turn_context: TurnContext):
         # Asks the user for their house number
@@ -476,7 +627,31 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_NUMBER)
 
     async def _handle_house_number_input(self, turn_context: TurnContext, user_profile, user_input):
-        # Processes the user's input for the house number
+        # First: Try CLU for StreetHousenumber entity (might contain house number)
+        street_entity = await self._extract_specific_entity(user_input, 'houseNumber')
+        if street_entity:
+            # Try to extract house number from StreetHousenumber entity
+            # Look for numbers in the entity text
+            numbers = re.findall(r'\d+', street_entity)
+            if numbers:
+                try:
+                    house_number = int(numbers[-1])  # Take the last number found
+                    if house_number > 0:
+                        user_profile['house_number'] = house_number
+                        await self.user_profile_accessor.set(turn_context, user_profile)
+
+                        if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                        'house_number', 'Hausnummer',
+                                                                        str(house_number)):
+                            return
+
+                        await self._confirm_field(turn_context, "Hausnummer", str(house_number),
+                                                  DialogState.CONFIRM_PREFIX + "house_number")
+                        return
+                except ValueError:
+                    pass
+
+        # Fallback: Try normal validation
         try:
             house_number = int(user_input.strip())
             if house_number > 0:
@@ -489,9 +664,11 @@ class RegistrationTextBot(ActivityHandler):
 
                 await self._confirm_field(turn_context, "Hausnummer", str(house_number),
                                           DialogState.CONFIRM_PREFIX + "house_number")
+                return
             else:
                 raise ValueError()
         except ValueError:
+            # Error case
             await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['house_number']))
 
     async def _ask_for_house_addition(self, turn_context: TurnContext):
@@ -532,17 +709,37 @@ class RegistrationTextBot(ActivityHandler):
 
     async def _handle_postal_input(self, turn_context: TurnContext, user_profile, user_input):
         # Asks the user for their city
-        if DataValidator.validate_postal_code(user_input):
-            user_profile['postal_code'] = user_input.strip()
+        zip_entity = await self._extract_specific_entity(user_input, 'ZipCode')
+        if zip_entity:
+            validated_postal = DataValidator.validate_postal_code(zip_entity)
+            if validated_postal:
+                user_profile['postal_code'] = validated_postal
+                await self.user_profile_accessor.set(turn_context, user_profile)
+
+                if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                'postal_code', 'Postleitzahl', validated_postal):
+                    return
+
+                await self._confirm_field(turn_context, "Postleitzahl", validated_postal,
+                                          DialogState.CONFIRM_PREFIX + "postal")
+                return
+
+        # Fallback: Try  validation
+        validated_postal = DataValidator.validate_postal_code_enhanced(user_input)
+        if validated_postal:
+            user_profile['postal_code'] = validated_postal
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'postal_code', 'Postleitzahl', user_input):
+                                                            'postal_code', 'Postleitzahl', validated_postal):
                 return
 
-            await self._confirm_field(turn_context, "Postleitzahl", user_input, DialogState.CONFIRM_PREFIX + "postal")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['postal']))
+            await self._confirm_field(turn_context, "Postleitzahl", validated_postal,
+                                      DialogState.CONFIRM_PREFIX + "postal")
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['postal']))
 
     async def _ask_for_city(self, turn_context: TurnContext):
         # asks the user of their city
@@ -550,8 +747,21 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_CITY)
 
     async def _handle_city_input(self, turn_context: TurnContext, user_profile, user_input):
-        # Processes the user's input for the city
-        if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', user_input.strip()):
+        # First: Try CLU for City entity
+        city_entity = await self._extract_specific_entity(user_input, 'City')
+        if city_entity and len(city_entity.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', city_entity.strip()):
+            user_profile['city'] = city_entity.strip()
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'city', 'Ort', city_entity):
+                return
+
+            await self._confirm_field(turn_context, "Ort", city_entity, DialogState.CONFIRM_PREFIX + "city")
+            return
+
+        # Fallback: Try normal validation
+        if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', user_input.strip()):
             user_profile['city'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
@@ -560,8 +770,10 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "Ort", user_input, DialogState.CONFIRM_PREFIX + "city")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['city']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['city']))
 
     async def _ask_for_country(self, turn_context: TurnContext):
         # Asks the user for their country
@@ -569,8 +781,22 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_COUNTRY)
 
     async def _handle_country_input(self, turn_context: TurnContext, user_profile, user_input):
-        # process the user input
-        if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+$', user_input.strip()):
+        # First: Try CLU for countryName entity
+        country_entity = await self._extract_specific_entity(user_input, 'countryName')
+        if country_entity and len(country_entity.strip()) >= 2 and re.match(
+                r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', country_entity.strip()):
+            user_profile['country_name'] = country_entity.strip()
+            await self.user_profile_accessor.set(turn_context, user_profile)
+
+            if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                            'country_name', 'Land', country_entity):
+                return
+
+            await self._confirm_field(turn_context, "Land", country_entity, DialogState.CONFIRM_PREFIX + "country")
+            return
+
+        # Fallback: Try normal validation
+        if len(user_input.strip()) >= 2 and re.match(r'^[a-zA-ZäöüÄÖÜß\s\-\.]+', user_input.strip()):
             user_profile['country_name'] = user_input.strip()
             await self.user_profile_accessor.set(turn_context, user_profile)
 
@@ -579,8 +805,10 @@ class RegistrationTextBot(ActivityHandler):
                 return
 
             await self._confirm_field(turn_context, "Land", user_input, DialogState.CONFIRM_PREFIX + "country")
-        else:
-            await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['country']))
+            return
+
+        # Error case
+        await turn_context.send_activity(MessageFactory.text(BotMessages.VALIDATION_ERRORS['country']))
 
     async def _confirm_field(self, turn_context: TurnContext, field_name: str, value: str, confirmation_state: str):
         # Sends a confirmation message for a field

@@ -16,7 +16,7 @@ class BotMessages:
         "Antworten Sie mit **'Nein'** um abzubrechen"
     )
 
-    
+
 
 
     CONSENT_GRANTED = (
@@ -93,7 +93,7 @@ class BotMessages:
         'title': "Bitte wählen Sie einen gültigen Titel aus der Liste oder geben Sie 'kein' ein.",
         'first_name': "Bitte geben Sie einen gültigen Vornamen ein (mindestens 2 Zeichen, nur Buchstaben):",
         'last_name': "Bitte geben Sie einen gültigen Nachnamen ein (mindestens 2 Zeichen):",
-        'birthdate': "Bitte geben Sie ein gültiges Geburtsdatum im Format TT.MM.JJJJ ein:",
+        'birthdate': "Bitte geben Sie ein gültiges Geburtsdatum im Format TT.MM.JJJJ ein. Das Alter muss über 16 Jahre liegen:",
         'email': "Bitte geben Sie eine gültige E-Mail-Adresse ein:",
         'phone': "Bitte geben Sie eine gültige deutsche Telefonnummer ein:",
         'street': "Bitte geben Sie eine gültige Straße ein (mindestens 3 Zeichen, nur Buchstaben und Leerzeichen):",
