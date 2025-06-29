@@ -26,8 +26,8 @@ class RegistrationTextBot(ActivityHandler):
         if isDocker:
             self.clu_service = None
         else:
-            print("🔧 Versuche CLU Service zu initialisieren...")
             self.clu_service = AzureCLUService()
+            print("Azure CLU Service initialized")
 
         # Accessors for storing and retrieving user profile and dialogue state data
         self.user_profile_accessor = self.conversation_state.create_property("UserProfile")
@@ -121,7 +121,7 @@ class RegistrationTextBot(ActivityHandler):
         await self.dialog_state_accessor.set(turn_context, "correction_selection")
 
     async def _handle_correction_selection(self, turn_context: TurnContext, user_profile, user_input):
-        """Handles the user's selection of which field to correct"""
+        # Handles the user's selection of which field to correct
         user_input_lower = user_input.lower().strip()
 
         # Handle special commands like "back" or "restart"
@@ -197,18 +197,21 @@ class RegistrationTextBot(ActivityHandler):
             return None
 
         try:
+            # send input to the clu
             entities = await self.clu_service.get_entities(text=user_input)
-            print(f"🔧 CLU Entities für {entity_type}: {entities}")
+            print(f"CLU Entities für {entity_type}: {entities}")
 
+            # iterate over the results
             for entity in entities:
                 entity_name = entity.get('name', '')
                 entity_text = entity.get('text', '')
 
+                # return only the entity part
                 if entity_name == entity_type:
-                    print(f"✅ {entity_type} gefunden: '{entity_text}'")
+                    print(f"{entity_type} gefunden: '{entity_text}'")
                     return entity_text
 
-            print(f"❌ Keine {entity_type} Entity gefunden")
+            print(f"Keine {entity_type} Entity gefunden")
             return None
 
         except Exception as e:
@@ -847,14 +850,14 @@ class RegistrationTextBot(ActivityHandler):
             await turn_context.send_activity(MessageFactory.text(BotMessages.CONFIRMATION_UNCLEAR))
 
     async def _show_final_summary(self, turn_context: TurnContext):
-        """Shows a summary of collected data and asks for final confirmation"""
+         # Shows a summary of collected data and asks for final confirmation
         user_profile = await self.user_profile_accessor.get(turn_context, lambda: {})
         summary_message = BotMessages.final_summary(user_profile)
         await turn_context.send_activity(MessageFactory.text(summary_message))
         await self.dialog_state_accessor.set(turn_context, DialogState.FINAL_CONFIRMATION)
 
     async def _handle_final_confirmation(self, turn_context: TurnContext, user_profile, user_input):
-        """Handles the final confirmation and saves the data"""
+        # Handles the final confirmation and saves the data
         user_input_lower = user_input.lower().strip()
 
         if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
@@ -887,17 +890,15 @@ class RegistrationTextBot(ActivityHandler):
             await turn_context.send_activity(MessageFactory.text(BotMessages.FINAL_CONFIRMATION_UNCLEAR))
 
     async def _start_correction_process(self, turn_context: TurnContext, user_profile):
-        """Starts the correction process by displaying a list of fields the user can choose to modify"""
+         # Starts the correction process by displaying a list of fields the user can choose to modify
         await turn_context.send_activity(MessageFactory.text(BotMessages.CORRECTION_OPTIONS))
         await self.dialog_state_accessor.set(turn_context, "correction_selection")
 
-    async def _save_customer_data(self, user_profile: dict) -> bool:
-        """
-        Speichert die gesammelten Benutzerdaten über den CustomerService.
-        Verarbeitet die Daten vor und delegiert die DB-Operationen an den Service.
-        """
+    async def _save_customer_data(self, user_profile: dict):
+        # try to save the customer data in database
+        # true if successful else False
         try:
-            # Datenbankoperationen an Service delegieren
+            # call the customer service for the db call
             return await self.customer_service.store_data_db(user_profile.copy())
 
         except Exception as e:
@@ -905,14 +906,14 @@ class RegistrationTextBot(ActivityHandler):
             return False
 
     async def _handle_error_state(self, turn_context: TurnContext, user_profile, user_input):
-        """Handles error states and offers recovery options"""
+        # Handles error states and offers recovery options
         user_input_lower = user_input.lower().strip()
 
         retry_keywords = ["nochmal", "retry", "wieder", "erneut", "versuchen"]
 
         if any(keyword in user_input_lower for keyword in retry_keywords):
             # Try again - return to final confirmation
-            await turn_context.send_activity(MessageFactory.text("🔄 **Versuche es nochmal...**"))
+            await turn_context.send_activity(MessageFactory.text(" **Versuche es nochmal...**"))
             await self._show_final_summary(turn_context)
 
         elif any(keyword in user_input_lower for keyword in FieldConfig.RESTART_KEYWORDS):
@@ -922,7 +923,3 @@ class RegistrationTextBot(ActivityHandler):
         else:
             # Offer help
             await turn_context.send_activity(MessageFactory.text(BotMessages.ERROR_HELP))
-
-    async def _show_correction_help(self, turn_context: TurnContext):
-        """Shows extended help for the correction system"""
-        await turn_context.send_activity(MessageFactory.text(BotMessages.CORRECTION_HELP))
