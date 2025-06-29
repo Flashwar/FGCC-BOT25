@@ -631,7 +631,7 @@ class RegistrationAudioBot(ActivityHandler):
             print(f"❌ Kompletter Audio-Fehler: {e}")
             await self._send_short_text_fallback(turn_context, text)
 
-    async def _send_audio_via_blob_improved(self, turn_context: TurnContext, audio_bytes: bytes):
+    async def _send_audio_via_blob(self, turn_context: TurnContext, audio_bytes: bytes):
         """
         Verbesserte Azure Blob Upload Methode
         """
