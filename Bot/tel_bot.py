@@ -16,6 +16,7 @@ from .text_speech_bot import SpeechBotMessages
 from .text_messages import FieldConfig
 from .azure_service.speech_service import AzureSpeechService
 from .azure_service.luis_service import AzureCLUService
+from .azure_service.storage_service import BlobService
 from FCCSemesterAufgabe.settings import isDocker
 
 
@@ -42,9 +43,11 @@ class RegistrationAudioBot(ActivityHandler):
             print("⚠️ Running in Docker - Azure services disabled")
             self.speech_service = None
             self.clu_service = None
+            self.audio_blob_uploader = None
         else:
             # Initialize Speech Service
             try:
+                self.audio_blob_uploader = BlobService()
                 self.speech_service = AzureSpeechService()
                 test_audio = self.speech_service.text_to_speech_bytes("Test")
                 if test_audio and len(test_audio) > 0:
@@ -356,43 +359,367 @@ class RegistrationAudioBot(ActivityHandler):
 
     # === AUDIO OUTPUT ===
 
-    async def _send_audio_response(self, turn_context: TurnContext, text: str):
-        """Send ONLY audio response (no duplicate text)"""
+    def _convert_markdown_to_speech(self, text: str) -> str:
+        """Konvertiert Markdown zu sprachfreundlichem Text"""
+        speech_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **bold** -> bold
+        speech_text = re.sub(r'\*([^*]+)\*', r'\1', speech_text)  # *italic* -> italic
+        speech_text = re.sub(r'•\s*', '', speech_text)  # Bullet points entfernen
+        speech_text = re.sub(r'\n+', ' ', speech_text)  # Zeilenumbrüche zu Leerzeichen
+        speech_text = re.sub(r'\s+', ' ', speech_text)  # Mehrfache Leerzeichen entfernen
+        return speech_text.strip()
+
+    # 2. FEHLENDE _send_short_text_fallback METHODE
+    async def _send_short_text_fallback(self, turn_context: TurnContext, text: str):
+        """
+        Sehr kurzer Text-Fallback ohne problematische Entities.
+        """
         try:
-            if not self.speech_service:
-                # Fallback to text only if TTS unavailable
-                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
-                return
+            # Text drastisch kürzen und Sonderzeichen entfernen
+            clean_text = text.replace('[', '').replace(']', '').replace('(', '').replace(')', '')
+            clean_text = re.sub(r'[^\w\s\.\,\!\?\-]', '', clean_text)  # Nur sichere Zeichen
 
-            # Convert text for speech
-            speech_text = self._convert_text_for_speech(text)
+            if len(clean_text) > 100:
+                clean_text = clean_text[:97] + "..."
 
-            # Generate audio
-            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+            fallback_message = f"🔊 {clean_text}"
+            await turn_context.send_activity(MessageFactory.text(fallback_message))
+            print(f"📝 Text-Fallback gesendet: {len(fallback_message)} Zeichen")
+        except Exception as e:
+            print(f"❌ Text-Fallback fehlgeschlagen: {e}")
+            try:
+                await turn_context.send_activity(MessageFactory.text("🔊 Audio-Fehler"))
+            except:
+                print("❌ Kompletter Kommunikationsfehler")
 
-            if not audio_bytes:
-                # Fallback to text if audio generation fails
-                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
-                return
+    # 3. FEHLENDE _compress_for_bot_framework METHODE
+    async def _compress_for_bot_framework(self, audio_bytes: bytes) -> bytes:
+        """
+        Aggressive Kompression speziell für Bot Framework 256KB Limit
+        """
+        try:
+            import tempfile
+            import subprocess
+            import os
 
-            # Check size limit (256KB for Bot Framework)
-            if len(audio_bytes) > 250000:
-                print(f"⚠️ Audio too large: {len(audio_bytes)} bytes")
-                # Split into smaller chunks or compress
-                await self._send_chunked_audio(turn_context, speech_text)
-                return
+            if not hasattr(self.audio_converter, 'ffmpeg_available') or not self.audio_converter.ffmpeg_available:
+                print("⚠️ FFmpeg nicht verfügbar - keine Kompression möglich")
+                return None
 
-            # Try multiple attachment methods
-            success = await self._send_audio_with_fallback(turn_context, audio_bytes)
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as input_file:
+                input_file.write(audio_bytes)
+                input_file.flush()
 
-            if not success:
-                # Final fallback to text
-                await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as output_file:
+                    try:
+                        # Sehr aggressive Kompression für Bot Framework
+                        cmd = [
+                            'ffmpeg', '-y', '-i', input_file.name,
+                            '-acodec', 'libmp3lame',
+                            '-b:a', '48k',  # Sehr niedrige Bitrate
+                            '-ac', '1',  # Mono
+                            '-ar', '22050',  # Niedrige Samplingrate
+                            '-q:a', '7',  # Niedrige Qualität aber verständlich
+                            '-f', 'mp3',
+                            output_file.name
+                        ]
+
+                        result = subprocess.run(cmd, capture_output=True, timeout=30)
+
+                        if result.returncode == 0:
+                            with open(output_file.name, 'rb') as f:
+                                compressed_data = f.read()
+
+                            compression_ratio = len(compressed_data) / len(audio_bytes) * 100
+                            print(
+                                f"🎵 Bot Framework Kompression: {len(audio_bytes)} → {len(compressed_data)} bytes ({compression_ratio:.1f}%)")
+
+                            return compressed_data
+                        else:
+                            print(f"❌ FFmpeg Kompression fehlgeschlagen: {result.stderr}")
+                            return None
+
+                    finally:
+                        try:
+                            os.unlink(output_file.name)
+                        except:
+                            pass
+
+            try:
+                os.unlink(input_file.name)
+            except:
+                pass
 
         except Exception as e:
-            print(f"❌ Audio response error: {e}")
-            # Send text fallback
-            await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+            print(f"❌ Bot Framework Kompression fehlgeschlagen: {e}")
+            return None
+
+    # 4. FEHLENDE _send_chunked_audio_small METHODE
+    async def _send_chunked_audio_small(self, turn_context: TurnContext, text: str):
+        """
+        Teilt Text in sehr kleine Chunks für Bot Framework Limits
+        """
+        try:
+            # Sehr kleine Chunks (50 Zeichen) um unter 256KB zu bleiben
+            chunks = self._split_text_for_tts(text, max_length=50)
+
+            success_count = 0
+
+            for i, chunk in enumerate(chunks):
+                if not chunk.strip():
+                    continue
+
+                try:
+                    # TTS für kleinen Chunk
+                    audio_bytes = self.speech_service.text_to_speech_bytes(chunk.strip())
+
+                    if audio_bytes and len(audio_bytes) <= 200000:  # 200KB sicher unter Limit
+                        await self._send_audio_file_direct(turn_context, audio_bytes)
+                        success_count += 1
+
+                        # Pause zwischen Chunks
+                        if i < len(chunks) - 1:
+                            import asyncio
+                            await asyncio.sleep(0.8)
+                    else:
+                        print(f"⚠️ Auch Chunk {i + 1} zu groß ({len(audio_bytes) if audio_bytes else 0} bytes)")
+                        await self._send_short_text_fallback(turn_context, chunk)
+
+                except Exception as chunk_error:
+                    print(f"❌ Chunk {i + 1} Fehler: {chunk_error}")
+                    await self._send_short_text_fallback(turn_context, chunk)
+
+            print(f"✅ Chunked Audio: {success_count}/{len(chunks)} Chunks erfolgreich gesendet")
+
+        except Exception as e:
+            print(f"❌ Chunked Audio Fehler: {e}")
+            await self._send_short_text_fallback(turn_context, text)
+
+    # 5. FEHLENDE _send_audio_file_direct METHODE
+    async def _send_audio_file_direct(self, turn_context: TurnContext, audio_bytes: bytes):
+        """
+        Sendet Audio-Bytes direkt als Datei (muss unter 256KB sein)
+        """
+        try:
+            import tempfile
+            import os
+
+            # Doppelt prüfen
+            if len(audio_bytes) > 250000:
+                print(f"❌ Audio immer noch zu groß: {len(audio_bytes)} bytes")
+                await self._send_short_text_fallback(turn_context, "Audio zu groß für Übertragung")
+                return
+
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file.flush()
+
+                try:
+                    with open(temp_file.name, 'rb') as audio_file:
+                        audio_data = audio_file.read()
+
+                    attachment = Attachment(
+                        content_type="audio/wav",
+                        content=audio_data,
+                        name="bot_response.wav"
+                    )
+
+                    reply = MessageFactory.attachment(attachment)
+                    await turn_context.send_activity(reply)
+                    print(f"✅ Audio-Datei direkt gesendet ({len(audio_bytes)} bytes)")
+
+                finally:
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
+
+        except Exception as e:
+            print(f"❌ Direkte Audio-Übertragung fehlgeschlagen: {e}")
+            await self._send_short_text_fallback(turn_context, "Audio-Upload fehlgeschlagen")
+
+    # 6. FEHLENDE _split_text_for_tts METHODE
+    def _split_text_for_tts(self, text: str, max_length: int = 50) -> list[str]:
+        """
+        Teilt Text in sehr kleine Chunks für Bot Framework Limits
+        """
+        if len(text) <= max_length:
+            return [text]
+
+        chunks = []
+        remaining_text = text
+
+        while remaining_text:
+            if len(remaining_text) <= max_length:
+                chunks.append(remaining_text.strip())
+                break
+
+            # Suche nach Satzende oder Leerzeichen
+            chunk = remaining_text[:max_length]
+            last_period = chunk.rfind('. ')
+            last_space = chunk.rfind(' ')
+
+            if last_period > max_length * 0.6:
+                split_pos = last_period + 1
+            elif last_space > max_length * 0.7:
+                split_pos = last_space
+            else:
+                split_pos = max_length
+
+            chunk = remaining_text[:split_pos].strip()
+            if chunk:
+                chunks.append(chunk)
+
+            remaining_text = remaining_text[split_pos:].strip()
+
+        print(f"📝 Text in {len(chunks)} sehr kleine Chunks aufgeteilt ({max_length} Zeichen max)")
+        return chunks
+
+    async def _send_audio_response(self, turn_context: TurnContext, text: str):
+        """
+        Verbesserte Audio-Response mit Azure Blob Storage und robusten Fallbacks
+        """
+        try:
+            print(f"🔊 Generiere Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+
+            # Text für Sprache optimieren
+            speech_text = self._convert_markdown_to_speech(text)
+
+            # TTS generieren
+            if not self.speech_service:
+                await self._send_short_text_fallback(turn_context, text)
+                return
+
+            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+
+            if not audio_bytes or len(audio_bytes) == 0:
+                await self._send_short_text_fallback(turn_context, text)
+                return
+
+            print(f"🎵 Audio generiert: {len(audio_bytes)} bytes")
+
+            # Strategie 1: Azure Blob Storage (für große Dateien)
+            if hasattr(self, 'audio_blob_uploader') and self.audio_blob_uploader.blob_service_client:
+                try:
+                    await self._send_audio_via_blob(turn_context, audio_bytes)
+                    return
+                except Exception as e:
+                    print(f"⚠️ Blob Upload fehlgeschlagen: {e} - versuche Fallback")
+
+            # Strategie 2: Direkte Übertragung (wenn unter Bot Framework Limit)
+            BOT_FRAMEWORK_LIMIT = 250000  # 250KB
+            if len(audio_bytes) <= BOT_FRAMEWORK_LIMIT:
+                try:
+                    await self._send_audio_file_direct(turn_context, audio_bytes)
+                    return
+                except Exception as e:
+                    print(f"⚠️ Direkte Übertragung fehlgeschlagen: {e}")
+
+            # Strategie 3: Kompression versuchen
+            try:
+                compressed = await self._compress_for_bot_framework(audio_bytes)
+                if compressed and len(compressed) <= BOT_FRAMEWORK_LIMIT:
+                    await self._send_audio_file_direct(turn_context, compressed)
+                    return
+            except Exception as e:
+                print(f"⚠️ Kompression fehlgeschlagen: {e}")
+
+            # Strategie 4: Text-Chunking als letzter Ausweg
+            print("⚠️ Alle Audio-Strategien fehlgeschlagen - verwende Text-Chunks")
+            await self._send_chunked_audio_small(turn_context, speech_text)
+
+        except Exception as e:
+            print(f"❌ Kompletter Audio-Fehler: {e}")
+            await self._send_short_text_fallback(turn_context, text)
+
+    async def _send_audio_via_blob_improved(self, turn_context: TurnContext, audio_bytes: bytes):
+        """
+        Verbesserte Azure Blob Upload Methode
+        """
+        try:
+            # Optional: Komprimiere für bessere Performance
+            final_audio = audio_bytes
+            content_type = "audio/wav"
+
+            if hasattr(self, '_compress_audio_for_blob'):
+                compressed_audio = await self._compress_audio_for_blob(audio_bytes)
+                if compressed_audio and len(compressed_audio) < len(audio_bytes) * 0.8:
+                    final_audio = compressed_audio
+                    content_type = "audio/mp3"
+                    print(f"📦 Kompression: {len(audio_bytes)} → {len(compressed_audio)} bytes")
+
+            # Upload zu Azure Blob
+            blob_url = await self.audio_blob_uploader.upload_audio_blob(final_audio, content_type)
+
+            if blob_url:
+                # Sende Attachment mit Blob URL
+                attachment = Attachment(
+                    content_type=content_type,
+                    content_url=blob_url,
+                    name="bot_response.mp3" if content_type == "audio/mp3" else "bot_response.wav"
+                )
+
+                reply = MessageFactory.attachment(attachment)
+                await turn_context.send_activity(reply)
+                print(f"✅ Audio via Azure Blob gesendet ({len(final_audio)} bytes)")
+            else:
+                raise Exception("Blob Upload returned no URL")
+
+        except Exception as e:
+            print(f"❌ Blob Audio-Upload fehlgeschlagen: {e}")
+            raise
+
+    async def _send_audio_fallback(self, turn_context: TurnContext, audio_bytes: bytes, original_text: str):
+        """
+        Fallback wenn Azure Blob nicht verfügbar
+        """
+        try:
+            print("⚠️ Azure Blob nicht verfügbar - verwende lokale Strategien")
+
+            # Versuche aggressive Kompression für Bot Framework Limit
+            compressed = await self._compress_for_bot_framework(audio_bytes)
+
+            if compressed and len(compressed) <= 250000:
+                # Direkte Übertragung möglich
+                attachment = Attachment(
+                    content_type="audio/mp3",
+                    content=compressed,
+                    name="bot_response.mp3"
+                )
+                reply = MessageFactory.attachment(attachment)
+                await turn_context.send_activity(reply)
+                print(f"✅ Komprimiertes Audio direkt gesendet ({len(compressed)} bytes)")
+            else:
+                # Text-Chunking als letzter Ausweg
+                await self._send_chunked_audio_small(turn_context, original_text)
+
+        except Exception as e:
+            print(f"❌ Audio-Fallback fehlgeschlagen: {e}")
+            await self._send_short_text_fallback(turn_context, original_text)
+
+    async def _compress_audio_for_blob(self, audio_bytes: bytes) -> bytes:
+        """
+        Moderate Kompression für Blob Storage (bessere Qualität da kein Bot Framework Limit)
+        """
+        try:
+            if not hasattr(self.audio_converter, 'ffmpeg_available') or not self.audio_converter.ffmpeg_available:
+                return None
+
+            # Moderate Kompression für Blob (96kbps, Mono)
+            if hasattr(self, '_compress_to_mp3_method'):
+                compressed = await self._compress_to_mp3_method(
+                    audio_bytes,
+                    bitrate="96k",
+                    channels=1,
+                    sample_rate=22050
+                )
+                return compressed
+
+            return None
+
+        except Exception as e:
+            print(f"❌ Blob-Kompression fehlgeschlagen: {e}")
+            return None
+
 
     async def _send_audio_and_text_response(self, turn_context: TurnContext, text: str):
         """Send both audio and text response for maximum accessibility"""
