@@ -368,11 +368,11 @@ class RegistrationAudioBot(ActivityHandler):
         speech_text = re.sub(r'\s+', ' ', speech_text)  # Mehrfache Leerzeichen entfernen
         return speech_text.strip()
 
-
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
         """
         Sendet Audio-Attachment wenn möglich, sonst kompletten Text.
-        Keine Chunks, keine Kompression - einfach und direkt.
+        Versucht, Audio über URL oder als Attachment zu senden,
+        und fällt auf Text zurück, wenn Audio nicht gesendet werden kann.
         """
         try:
             print(f" Versuche Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
@@ -396,19 +396,34 @@ class RegistrationAudioBot(ActivityHandler):
 
             print(f"🎵 Audio generiert: {len(audio_bytes)} bytes")
 
-            # Prüfe Größe für Bot Framework/Telegram Limits
-            MAX_AUDIO_SIZE = 200000  # 200KB - konservativ für alle Plattformen
+            # Telegrams Bot API Limit für direkte Uploads (50 MB)
+            # Wir verwenden hier ein großzügigeres Limit für direktes Senden
+            # da Telegram Dateien bis 50MB hochladen kann.
+            # Für die URL-Methode gibt es ein Limit von 2GB, daher hier der Schwellenwert.
+            # Realistisch ist es oft besser, kleinere Audios direkt zu senden und größere über URL.
+            # Wir setzen hier 40 MB als Schwellenwert, um auf der sicheren Seite zu sein
+            # für den direkten Upload, bevor wir auf URL-Upload (Blob) wechseln.
+            MAX_AUDIO_SIZE_FOR_DIRECT_SEND = 40 * 1024 * 1024  # 40 MB
 
-            if len(audio_bytes) <= MAX_AUDIO_SIZE:
-                # Audio ist klein genug - versuche zu senden
-                success = await self._try_send_audio_attachment(turn_context, audio_bytes)
+            if len(audio_bytes) <= MAX_AUDIO_SIZE_FOR_DIRECT_SEND:
+                # Audio ist klein genug für direkten Upload oder Base64 (was eher für kleine Dateien ist)
+                # Direktes Attachment an Bot Framework gesendet
+                success = await self._try_send_audio_attachment(turn_context, audio_bytes, use_blob_for_large=False)
                 if success:
                     print(f"✅ Audio erfolgreich gesendet ({len(audio_bytes)} bytes)")
                     return
                 else:
-                    print("❌ Audio-Attachment fehlgeschlagen - sende kompletten Text")
+                    print("❌ Direktes Audio-Attachment fehlgeschlagen - versuche Blob-Upload oder sende Text")
             else:
-                print(f"❌ Audio zu groß ({len(audio_bytes)} bytes > {MAX_AUDIO_SIZE}) - sende kompletten Text")
+                print(
+                    f"❗ Audio zu groß ({len(audio_bytes)} bytes > {MAX_AUDIO_SIZE_FOR_DIRECT_SEND}) - versuche Blob-Upload")
+                # Versuche Blob-Upload für große Dateien
+                success = await self._try_send_audio_attachment(turn_context, audio_bytes, use_blob_for_large=True)
+                if success:
+                    print(f"✅ Großes Audio erfolgreich über Blob gesendet ({len(audio_bytes)} bytes)")
+                    return
+                else:
+                    print("❌ Blob-Upload fehlgeschlagen - sende kompletten Text")
 
             # Fallback: Kompletten Text senden
             await self._send_complete_text(turn_context, text)
@@ -417,80 +432,84 @@ class RegistrationAudioBot(ActivityHandler):
             print(f"❌ Audio-Response Fehler: {e}")
             await self._send_complete_text(turn_context, text)
 
-    async def _try_send_audio_attachment(self, turn_context: TurnContext, audio_bytes: bytes) -> bool:
+    async def _try_send_audio_attachment(self, turn_context: TurnContext, audio_bytes: bytes,
+                                         use_blob_for_large: bool = False) -> bool:
         """
-        Versucht Audio als Attachment zu senden. Gibt True bei Erfolg zurück.
+        Versucht Audio als Attachment oder über eine URL (Telegram's sendAudio) zu senden.
+        Gibt True bei Erfolg zurück.
+        Nutzt ChannelData für spezifische Telegram-Methoden (sendAudio).
+        Berücksichtigt die Telegram-Dateigrößenlimits.
         """
-        # Methode 1: Direktes Attachment (beste Option)
-        try:
-            attachment = Attachment(
-                content_type="audio/wav",
-                content=audio_bytes,
-                name="voice_response.wav"
-            )
+        # Maximale Größe für den direkten Upload über Bot Framework (ca. 50 MB Telegram API Limit)
+        # Für Blob-URLs ist das Limit viel höher (bis zu 2 GB)
+        TELEGRAM_DIRECT_UPLOAD_LIMIT = 50 * 1024 * 1024  # 50 MB
 
-            reply = MessageFactory.attachment(attachment)
-            await turn_context.send_activity(reply)
-            return True
+        # 1. Direkter Upload über Bot Framework Attachment (für kleinere Dateien <= 50MB)
+        # Bot Framework handhabt den Upload an Telegram für dich.
+        if not use_blob_for_large and len(audio_bytes) <= TELEGRAM_DIRECT_UPLOAD_LIMIT:
+            try:
+                # Telegram bevorzugt OGG Opus für Sprachnachrichten, aber WAV als Audio geht auch.
+                # Hier senden wir es als WAV und lassen Telegram entscheiden, wie es angezeigt wird.
+                attachment = Attachment(
+                    content_type="audio/wav",
+                    content=base64.b64encode(audio_bytes).decode('utf-8'),  # Sende als Base64-String im Content
+                    name="voice_response.wav"
+                )
 
-        except Exception as e:
-            print(f"⚠️ Direktes Attachment fehlgeschlagen: {e}")
-
-        # Methode 2: Base64 Data URL (Fallback)
-        try:
-            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-
-            # Prüfe Base64 Größe
-            if len(audio_base64) > 100000:  # 100KB Base64 Limit
-                print(f"⚠️ Base64 zu groß: {len(audio_base64)} chars")
+                reply = MessageFactory.attachment(attachment)
+                # Optional: Telegram spezifische ChannelData für sendAudio
+                # Dies kann helfen, wenn Telegram es explizit als Audio behandeln soll,
+                # anstatt als allgemeines Dokument.
+                reply.channel_data = {
+                    "method": "sendAudio",
+                    "parameters": {
+                        "chat_id": turn_context.activity.from_.id,
+                        # "audio" Feld muss hier nicht gesetzt werden, da das Bot Framework
+                        # das Attachment selbst als Datei an Telegram sendet.
+                        # Wenn wir eine URL senden wollen, setzen wir 'audio' hier und nicht 'content'.
+                        "caption": "Hier ist Ihre Audiodatei."  # Optionaler Text
+                    }
+                }
+                await turn_context.send_activity(reply)
+                return True
+            except Exception as e:
+                print(f"⚠️ Direkter Audio-Attachment Versuch fehlgeschlagen: {e}")
+                # Fallback, wenn direkter Attachment fehlschlägt, aber immer noch unter dem Limit ist
+                # oder wenn use_blob_for_large explizit auf False ist.
                 return False
 
-            attachment = Attachment(
-                content_type="audio/wav",
-                content_url=f"data:audio/wav;base64,{audio_base64}",
-                name="voice_response.wav"
-            )
+        # 2. Upload zu Azure Blob Storage und Senden der URL (für größere Dateien oder als Fallback)
+        # Telegram erlaubt URLs für sendAudio bis zu 2 GB.
+        if self.audio_blob_uploader and len(audio_bytes) <= (2 * 1024 * 1024 * 1024):  # Bis zu 2GB
+            try:
+                # Lade Audio in den Blob Storage hoch
+                blob_name = f"audio_response_{turn_context.activity.conversation.id}_{datetime.now().timestamp()}.wav"
+                audio_url = await self.audio_blob_uploader.upload_blob(audio_bytes, blob_name, "audio/wav")
 
-            reply = MessageFactory.attachment(attachment)
-            await turn_context.send_activity(reply)
-            return True
+                if audio_url:
+                    print(f"✅ Audio in Blob Storage hochgeladen: {audio_url}")
 
-        except Exception as e:
-            print(f"⚠️ Base64 Attachment fehlgeschlagen: {e}")
-
-        # Methode 3: Temporäre Datei (letzter Versuch)
-        try:
-            import tempfile
-            import os
-
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                temp_file.write(audio_bytes)
-                temp_file.flush()
-
-                try:
-                    with open(temp_file.name, 'rb') as audio_file:
-                        file_data = audio_file.read()
-
-                    attachment = Attachment(
-                        content_type="audio/wav",
-                        content=file_data,
-                        name="voice_response.wav"
-                    )
-
-                    reply = MessageFactory.attachment(attachment)
+                    # Sende die URL an Telegram über ChannelData
+                    reply = MessageFactory.text("")  # Leerer Text, da der Anhang über ChannelData kommt
+                    reply.channel_data = {
+                        "method": "sendAudio",
+                        "parameters": {
+                            "chat_id": turn_context.activity.from_.id,
+                            "audio": audio_url,  # Die URL zum Blob
+                            "caption": "Hier ist Ihre Audiodatei (über URL gesendet)."  # Optionaler Text
+                        }
+                    }
                     await turn_context.send_activity(reply)
                     return True
+                else:
+                    print("❌ Blob-Upload fehlgeschlagen, keine URL erhalten.")
+                    return False
+            except Exception as e:
+                print(f"⚠️ Blob-Upload und URL-Versand fehlgeschlagen: {e}")
+                return False
 
-                finally:
-                    try:
-                        os.unlink(temp_file.name)
-                    except:
-                        pass
-
-        except Exception as e:
-            print(f"⚠️ Temporäre Datei Methode fehlgeschlagen: {e}")
-
-        # Alle Methoden fehlgeschlagen
+        # Alle Methoden fehlgeschlagen oder Datei zu groß
+        print("❌ Alle Audio-Versandmethoden fehlgeschlagen oder Datei zu groß für alle Limits.")
         return False
 
     async def _send_complete_text(self, turn_context: TurnContext, text: str):
@@ -499,11 +518,12 @@ class RegistrationAudioBot(ActivityHandler):
         Keine Kürzung, keine Chunks - alles auf einmal.
         """
         try:
-            # Text für bessere Lesbarkeit vorbereiten
-            clean_text = self._convert_markdown_to_speech(text)
-
             # Füge Audio-Symbol hinzu um zu zeigen dass es ein Audio-Bot ist
-            complete_message = "clean_text"
+            complete_message = self._convert_markdown_to_speech(text)
+
+            # Füge ein Hinweis-Emoji hinzu, da keine Sprachausgabe möglich war
+            if turn_context.activity.channel_id == "telegram":
+                complete_message = "🔊 " + complete_message  # Telegram unterstützt Emojis gut
 
             await turn_context.send_activity(MessageFactory.text(complete_message))
             print(f" Kompletten Text gesendet: {len(complete_message)} Zeichen")
@@ -512,7 +532,8 @@ class RegistrationAudioBot(ActivityHandler):
             print(f"Text-Fallback fehlgeschlagen: {e}")
             # Letzter Notfall
             try:
-                await turn_context.send_activity(MessageFactory.text("🔊 Kommunikationsfehler"))
+                await turn_context.send_activity(
+                    MessageFactory.text("⚠️ Kommunikationsfehler. Bitte versuchen Sie es später erneut."))
             except:
                 print("❌ Kompletter Kommunikationsfehler")
 
@@ -598,9 +619,8 @@ class RegistrationAudioBot(ActivityHandler):
     async def _handle_title_input(self, turn_context: TurnContext, user_profile, user_input):
         """Handle title input with CLU"""
         # Try CLU extraction
-        title_entity = await self._extract_entity_with_clu(user_input, 'Title')
 
-        user_input_lower = (title_entity or user_input).strip().lower()
+        user_input_lower = (user_input).strip().lower()
 
         if user_input_lower in FieldConfig.NO_TITLE_KEYWORDS:
             user_profile['title'] = ''
@@ -613,8 +633,8 @@ class RegistrationAudioBot(ActivityHandler):
 
             await self._confirm_field(turn_context, "Titel", "Kein Titel",
                                       DialogState.CONFIRM_PREFIX + "title")
-        elif (title_entity or user_input) in FieldConfig.VALID_TITLES:
-            title_value = title_entity or user_input
+        elif (user_input) in FieldConfig.VALID_TITLES:
+            title_value = user_input
             user_profile['title'] = title_value
             user_profile['title_display'] = title_value
             await self.user_profile_accessor.set(turn_context, user_profile)
