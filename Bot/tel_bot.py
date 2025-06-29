@@ -424,60 +424,60 @@ class RegistrationAudioBot(ActivityHandler):
     # === AUDIO OUTPUT ===
 
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
-        """Sendet NUR Audio-Antworten mit Längen-Optimierung"""
+        """
+        Sendet Audio als echte Datei statt Base64 data: URL
+        Umgeht Telegram Entity-Limits komplett!
+        """
         try:
-            print(f"🔊 Generiere Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+            import tempfile
+            import os
+
+            print(f"🔊 Generiere Audio-Datei für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
 
             # Text für Sprache optimieren
             speech_text = self._convert_markdown_to_speech(text)
 
-            # Text in kleinere Chunks aufteilen wenn zu lang
-            chunks = self._split_text_for_tts(speech_text)
+            # TTS generieren
+            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
 
-            for i, chunk in enumerate(chunks):
+            if not audio_bytes or len(audio_bytes) == 0:
+                print("❌ TTS fehlgeschlagen - sende Text-Fallback")
+                await self._send_short_text_fallback(turn_context, text)
+                return
+
+            print(f"🎵 Audio generiert: {len(audio_bytes)} bytes")
+
+            # Temporäre Datei erstellen
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file.flush()
+
                 try:
-                    # TTS für jeden Chunk
-                    audio_bytes = self.speech_service.text_to_speech_bytes(chunk)
+                    # Audio-Datei lesen
+                    with open(temp_file.name, 'rb') as audio_file:
+                        audio_data = audio_file.read()
 
-                    if audio_bytes and len(audio_bytes) > 0:
-                        # Prüfe Audio-Größe (Telegram-Limit: ~50MB, aber besser kleiner halten)
-                        if len(audio_bytes) > 10 * 1024 * 1024:  # 10MB Limit
-                            print(f"⚠️ Audio-Chunk {i + 1} zu groß ({len(audio_bytes)} bytes) - überspringe")
-                            continue
+                    # File-basiertes Attachment (KEIN Base64!)
+                    attachment = Attachment(
+                        content_type="audio/wav",
+                        content=audio_data,  # Direkte Bytes statt content_url!
+                        name="bot_response.wav"
+                    )
 
-                        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                    reply = MessageFactory.attachment(attachment)
+                    await turn_context.send_activity(reply)
+                    print(f"✅ Audio-Datei gesendet ({len(audio_bytes)} bytes, kein Base64-Limit)")
 
-                        # Prüfe Base64-Größe (Telegram entity limit)
-                        if len(audio_base64) > 200000:  # ~200KB Base64 Limit
-                            print(f"⚠️ Base64-Chunk {i + 1} zu groß ({len(audio_base64)} chars) - sende Fallback")
-                            await self._send_text_fallback(turn_context, chunk)
-                            continue
-
-                        attachment = Attachment(
-                            content_type="audio/wav",
-                            content_url=f"data:audio/wav;base64,{audio_base64}",
-                            name=f"bot_response_{i + 1}.wav"
-                        )
-                        reply = MessageFactory.attachment(attachment)
-                        await turn_context.send_activity(reply)
-                        print(f"✅ Audio-Chunk {i + 1}/{len(chunks)} gesendet")
-
-                        # Kurze Pause zwischen Chunks
-                        if len(chunks) > 1 and i < len(chunks) - 1:
-                            import asyncio
-                            await asyncio.sleep(0.5)
-
-                    else:
-                        print(f"❌ TTS für Chunk {i + 1} fehlgeschlagen")
-                        await self._send_text_fallback(turn_context, chunk)
-
-                except Exception as chunk_error:
-                    print(f"❌ Fehler bei Chunk {i + 1}: {chunk_error}")
-                    await self._send_text_fallback(turn_context, chunk)
+                finally:
+                    # Temporäre Datei löschen
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
 
         except Exception as e:
-            print(f"❌ Allgemeiner TTS Fehler: {e}")
-            await self._send_text_fallback(turn_context, text)
+            print(f"❌ File-Audio Fehler: {e}")
+            await self._send_short_text_fallback(turn_context, text)
 
     def _split_text_for_tts(self, text: str, max_length: int = 500) -> list[str]:
         """
@@ -525,17 +525,28 @@ class RegistrationAudioBot(ActivityHandler):
         print(f"📝 Text in {len(chunks)} Chunks aufgeteilt")
         return chunks
 
-    async def _send_text_fallback(self, turn_context: TurnContext, text: str):
+    async def _send_short_text_fallback(self, turn_context: TurnContext, text: str):
         """
-        Fallback: Sendet Text wenn Audio nicht funktioniert.
-        Nur als letzte Option verwenden.
+        Sicherer Text-Fallback wenn Audio komplett fehlschlägt
         """
         try:
-            fallback_message = f"🔊 [Audio nicht verfügbar] {text[:500]}{'...' if len(text) > 500 else ''}"
+            # Text kürzen und säubern
+            clean_text = text.replace('[', '').replace(']', '').replace('(', '').replace(')', '')
+            clean_text = re.sub(r'[^\w\s\.\,\!\?\-]', '', clean_text)
+
+            if len(clean_text) > 100:
+                clean_text = clean_text[:97] + "..."
+
+            fallback_message = f"🔊 {clean_text}"
             await turn_context.send_activity(MessageFactory.text(fallback_message))
-            print("📝 Text-Fallback gesendet")
+            print(f"📝 Text-Fallback gesendet: {len(fallback_message)} Zeichen")
+
         except Exception as e:
-            print(f"❌ Auch Text-Fallback fehlgeschlagen: {e}")
+            print(f"❌ Text-Fallback fehlgeschlagen: {e}")
+            try:
+                await turn_context.send_activity(MessageFactory.text("🔊 Audio-Fehler"))
+            except:
+                print("❌ Kompletter Kommunikationsfehler")
 
     async def _send_recognized_text_display(self, turn_context: TurnContext, recognized_text: str):
         """
@@ -572,6 +583,74 @@ class RegistrationAudioBot(ActivityHandler):
         speech_text = re.sub(r'\s+', ' ', speech_text)  # Mehrfache Leerzeichen entfernen
         return speech_text.strip()
 
+    async def _send_audio_response_with_compression(self, turn_context: TurnContext, text: str):
+        """
+        File-Upload MIT Kompression für optimale Performance
+        """
+        try:
+            import tempfile
+            import os
+
+            print(f"🔊 Generiere komprimierte Audio-Datei für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+
+            # Text für Sprache optimieren
+            speech_text = self._convert_markdown_to_speech(text)
+
+            # TTS generieren
+            audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+
+            if not audio_bytes or len(audio_bytes) == 0:
+                await self._send_short_text_fallback(turn_context, text)
+                return
+
+            print(f"🎵 Original Audio: {len(audio_bytes)} bytes")
+
+            # Optional: Komprimierung (falls FFmpeg verfügbar)
+            compressed_audio = audio_bytes
+            if hasattr(self.audio_converter, 'compress_to_mp3') and self.audio_converter.ffmpeg_available:
+                try:
+                    compressed_audio = await self.audio_converter.compress_to_mp3(audio_bytes, bitrate="96k")
+                    if compressed_audio:
+                        print(f"📦 Komprimiert: {len(compressed_audio)} bytes")
+                    else:
+                        compressed_audio = audio_bytes
+                except:
+                    print("⚠️ Kompression fehlgeschlagen, verwende Original")
+                    compressed_audio = audio_bytes
+
+            # Temporäre Datei erstellen
+            file_suffix = '.mp3' if compressed_audio != audio_bytes else '.wav'
+            content_type = 'audio/mp3' if compressed_audio != audio_bytes else 'audio/wav'
+
+            with tempfile.NamedTemporaryFile(suffix=file_suffix, delete=False) as temp_file:
+                temp_file.write(compressed_audio)
+                temp_file.flush()
+
+                try:
+                    # Audio-Datei lesen
+                    with open(temp_file.name, 'rb') as audio_file:
+                        audio_data = audio_file.read()
+
+                    # File-basiertes Attachment
+                    attachment = Attachment(
+                        content_type=content_type,
+                        content=audio_data,
+                        name=f"bot_response{file_suffix}"
+                    )
+
+                    reply = MessageFactory.attachment(attachment)
+                    await turn_context.send_activity(reply)
+                    print(f"✅ Komprimierte Audio-Datei gesendet ({len(compressed_audio)} bytes)")
+
+                finally:
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
+
+        except Exception as e:
+            print(f"❌ Komprimierte File-Audio Fehler: {e}")
+            await self._send_short_text_fallback(turn_context, text)
 
     # === DIALOG HANDLERS (Identisch zum Text-Bot, nur mit Audio-Output) ===
 
