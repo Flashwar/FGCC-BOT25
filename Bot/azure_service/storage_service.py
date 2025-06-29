@@ -18,7 +18,7 @@ class BlobService:
             print("Azure Blob Storage initialized with Connection String")
         else:
             self.blob_service_client = None
-            print("⚠️ Azure Storage Connection String not found")
+            print(" Azure Storage Connection String not found")
 
     async def upload_audio_blob(self, audio_bytes: bytes, content_type: str = "audio/wav"):
         # Uploads audio to Azure Blob Storage and returns the SAS URL
