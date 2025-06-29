@@ -371,14 +371,13 @@ class RegistrationAudioBot(ActivityHandler):
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
         """
         Sendet Audio-Attachment wenn möglich, sonst kompletten Text.
-        Versucht, Audio über URL oder als Attachment zu senden,
+        Versucht, Audio direkt als Attachment zu senden (limitiert auf 50 MB),
         und fällt auf Text zurück, wenn Audio nicht gesendet werden kann.
         """
         try:
             print(f" Versuche Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
 
-            # Extract recipient_chat_id once from the incoming activity
-            # This is the ID of the user the bot is replying to.
+            # Extrahieren der recipient_chat_id einmal aus der eingehenden Aktivität
             recipient_chat_id = turn_context.activity.from_.id if turn_context.activity.from_ else None
             if not recipient_chat_id:
                 print("❌ Empfänger-Chat-ID konnte nicht ermittelt werden, kann Audio nicht senden.")
@@ -404,29 +403,13 @@ class RegistrationAudioBot(ActivityHandler):
 
             print(f"🎵 Audio generiert: {len(audio_bytes)} bytes")
 
-            # Telegrams Bot API Limit für direkte Uploads (50 MB)
-            MAX_AUDIO_SIZE_FOR_DIRECT_SEND = 40 * 1024 * 1024  # 40 MB for direct upload
-
-            if len(audio_bytes) <= MAX_AUDIO_SIZE_FOR_DIRECT_SEND:
-                success = await self._try_send_audio_attachment(
-                    turn_context, audio_bytes, recipient_chat_id, use_blob_for_large=False
-                )
-                if success:
-                    print(f"✅ Audio erfolgreich gesendet ({len(audio_bytes)} bytes)")
-                    return
-                else:
-                    print("❌ Direktes Audio-Attachment fehlgeschlagen - versuche Blob-Upload oder sende Text")
+            # Direkter Versand an Telegram (limitiert auf 50 MB)
+            success = await self._try_send_audio_attachment(turn_context, audio_bytes, recipient_chat_id)
+            if success:
+                print(f"✅ Audio erfolgreich direkt gesendet ({len(audio_bytes)} bytes)")
+                return
             else:
-                print(
-                    f"❗ Audio zu groß ({len(audio_bytes)} bytes > {MAX_AUDIO_SIZE_FOR_DIRECT_SEND}) - versuche Blob-Upload")
-                success = await self._try_send_audio_attachment(
-                    turn_context, audio_bytes, recipient_chat_id, use_blob_for_large=True
-                )
-                if success:
-                    print(f"✅ Großes Audio erfolgreich über Blob gesendet ({len(audio_bytes)} bytes)")
-                    return
-                else:
-                    print("❌ Blob-Upload fehlgeschlagen - sende kompletten Text")
+                print("❌ Direkter Audio-Attachment fehlgeschlagen - sende kompletten Text")
 
             # Fallback: Kompletten Text senden
             await self._send_complete_text(turn_context, text)
@@ -435,71 +418,47 @@ class RegistrationAudioBot(ActivityHandler):
             print(f"❌ Audio-Response Fehler: {e}")
             await self._send_complete_text(turn_context, text)
 
-    async def _try_send_audio_attachment(self, turn_context: TurnContext, audio_bytes: bytes, recipient_chat_id: str,
-                                         use_blob_for_large: bool = False) -> bool:
+
+    async def _try_send_audio_attachment(self, turn_context: TurnContext, audio_bytes: bytes, recipient_chat_id: str) -> bool:
         """
-        Versucht Audio als Attachment oder über eine URL (Telegram's sendAudio) zu senden.
-        Gibt True bei Erfolg zurück.
-        Nutzt ChannelData für spezifische Telegram-Methoden (sendAudio).
-        Berücksichtigt die Telegram-Dateigrößenlimits.
+        Versucht Audio als direktes Attachment über das Bot Framework zu senden.
+        Dies funktioniert nur bis zum 50 MB Limit der Telegram Bot API.
+        Es wird KEIN Blob Storage verwendet.
         """
+        # Maximale Größe für den direkten Upload über Telegram Bot API
         TELEGRAM_DIRECT_UPLOAD_LIMIT = 50 * 1024 * 1024  # 50 MB
 
-        # 1. Direkter Upload über Bot Framework Attachment (für kleinere Dateien <= 50MB)
-        if not use_blob_for_large and len(audio_bytes) <= TELEGRAM_DIRECT_UPLOAD_LIMIT:
-            try:
-                attachment = Attachment(
-                    content_type="audio/wav",
-                    content=base64.b64encode(audio_bytes).decode('utf-8'),
-                    name="voice_response.wav"
-                )
+        if len(audio_bytes) > TELEGRAM_DIRECT_UPLOAD_LIMIT:
+            print(f"❌ Audio-Datei ({len(audio_bytes)} Bytes) ist größer als das direkte Telegram Upload-Limit von {TELEGRAM_DIRECT_UPLOAD_LIMIT / (1024 * 1024):.0f} MB.")
+            print("   Senden der Datei ohne externen Speicher ist nicht möglich. Fällt auf Text zurück.")
+            return False
 
-                reply = MessageFactory.attachment(attachment)
-                reply.channel_data = {
-                    "method": "sendAudio",
-                    "parameters": {
-                        "chat_id": recipient_chat_id,  # Use the passed recipient_chat_id
-                        "caption": "Hier ist Ihre Audiodatei."
-                    }
+        try:
+            # Sende als Base64-String im Content des Attachments.
+            # Das Bot Framework kümmert sich um den Upload an Telegram.
+            attachment = Attachment(
+                content_type="audio/wav",
+                content=base64.b64encode(audio_bytes).decode('utf-8'),
+                name="voice_response.wav"
+            )
+
+            reply = MessageFactory.attachment(attachment)
+            # ChannelData für Telegram's sendAudio Methode.
+            # Dies ist optional, kann aber die Darstellung in Telegram verbessern.
+            reply.channel_data = {
+                "method": "sendAudio",
+                "parameters": {
+                    "chat_id": recipient_chat_id, # Die zuvor ermittelte Chat-ID
+                    "caption": "Hier ist Ihre Audiodatei." # Optionaler Text
                 }
-                await turn_context.send_activity(reply)
-                return True
-            except Exception as e:
-                print(f"⚠️ Direkter Audio-Attachment Versuch fehlgeschlagen: {e}")
-                return False
+            }
+            await turn_context.send_activity(reply)
+            print(f"✅ Audio erfolgreich direkt gesendet ({len(audio_bytes)} Bytes)")
+            return True
+        except Exception as e:
+            print(f"⚠️ Direkter Audio-Attachment Versuch fehlgeschlagen: {e}")
+            return False
 
-        # 2. Upload zu Azure Blob Storage und Senden der URL (für größere Dateien oder als Fallback)
-        # Check for self.audio_blob_uploader existence and if the BlobService is configured
-        if self.audio_blob_uploader and self.audio_blob_uploader.blob_service_client and len(audio_bytes) <= (
-                2 * 1024 * 1024 * 1024):  # Up to 2GB
-            try:
-                blob_name = f"bot-audio-{uuid.uuid4()}.wav"  # Use uuid for unique names
-                audio_url = await self.audio_blob_uploader.upload_audio_blob(audio_bytes,
-                                                                             "audio/wav")  # Corrected method name to upload_audio_blob
-
-                if audio_url:
-                    print(f"✅ Audio in Blob Storage hochgeladen: {audio_url}")
-
-                    reply = MessageFactory.text("")
-                    reply.channel_data = {
-                        "method": "sendAudio",
-                        "parameters": {
-                            "chat_id": recipient_chat_id,  # Use the passed recipient_chat_id
-                            "audio": audio_url,
-                            "caption": "Hier ist Ihre Audiodatei (über URL gesendet)."
-                        }
-                    }
-                    await turn_context.send_activity(reply)
-                    return True
-                else:
-                    print("❌ Blob-Upload fehlgeschlagen, keine URL erhalten.")
-                    return False
-            except Exception as e:
-                print(f"⚠️ Blob-Upload und URL-Versand fehlgeschlagen: {e}")
-                return False
-
-        print("❌ Alle Audio-Versandmethoden fehlgeschlagen oder Datei zu groß für alle Limits.")
-        return False
 
     async def _send_complete_text(self, turn_context: TurnContext, text: str):
         """
@@ -512,7 +471,7 @@ class RegistrationAudioBot(ActivityHandler):
 
             # Füge ein Hinweis-Emoji hinzu, da keine Sprachausgabe möglich war
             if turn_context.activity.channel_id == "telegram":
-                complete_message = "🔊 " + complete_message  # Telegram unterstützt Emojis gut
+                complete_message = "" + complete_message  # Telegram unterstützt Emojis gut
 
             await turn_context.send_activity(MessageFactory.text(complete_message))
             print(f" Kompletten Text gesendet: {len(complete_message)} Zeichen")
@@ -522,7 +481,7 @@ class RegistrationAudioBot(ActivityHandler):
             # Letzter Notfall
             try:
                 await turn_context.send_activity(
-                    MessageFactory.text("⚠️ Kommunikationsfehler. Bitte versuchen Sie es später erneut."))
+                    MessageFactory.text("Kommunikationsfehler. Bitte versuchen Sie es später erneut."))
             except:
                 print("❌ Kompletter Kommunikationsfehler")
 
@@ -886,32 +845,48 @@ class RegistrationAudioBot(ActivityHandler):
         await self._send_audio_response(turn_context, SpeechBotMessages.FIELD_PROMPTS['house_addition'])
         await self.dialog_state_accessor.set(turn_context, DialogState.ASK_HOUSE_ADDITION)
 
-
     async def _handle_house_addition_input(self, turn_context: TurnContext, user_profile, user_input):
-        """Handle house addition input"""
-        if user_input.lower() in FieldConfig.NO_ADDITION_KEYWORDS:
+        """Handle house addition input with regex validation"""
+        import re
+
+        # Prüfen ob "kein Zusatz" gemeint ist
+        if user_input.lower().strip() in FieldConfig.NO_ADDITION_KEYWORDS:
             user_profile['house_number_addition'] = ""
             user_profile['house_addition_display'] = "Kein Zusatz"
             await self.user_profile_accessor.set(turn_context, user_profile)
 
             if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'house_number_addition', 'Hausnummernzusatz', "Kein Zusatz"):
+                                                            'house_number_addition', 'Hausnummernzusatz',
+                                                            "Kein Zusatz"):
                 return
 
             await self._confirm_field(turn_context, "Hausnummernzusatz", "Kein Zusatz",
                                       DialogState.CONFIRM_PREFIX + "house_addition")
         else:
-            user_profile['house_number_addition'] = user_input.strip()
-            user_profile['house_addition_display'] = user_input.strip()
-            await self.user_profile_accessor.set(turn_context, user_profile)
+            # Regex-Validierung für Hausnummernzusatz
+            house_addition_pattern = r'^(?:[-\/])?\d*[a-zA-Z]?$'
+            cleaned_input = user_input.strip()
 
-            if await self._check_correction_mode_and_handle(turn_context, user_profile,
-                                                            'house_number_addition', 'Hausnummernzusatz', user_input):
-                return
+            if re.match(house_addition_pattern, cleaned_input):
+                # Gültiger Hausnummernzusatz
+                user_profile['house_number_addition'] = cleaned_input
+                user_profile['house_addition_display'] = cleaned_input
+                await self.user_profile_accessor.set(turn_context, user_profile)
 
-            await self._confirm_field(turn_context, "Hausnummernzusatz", user_input,
-                                      DialogState.CONFIRM_PREFIX + "house_addition")
+                if await self._check_correction_mode_and_handle(turn_context, user_profile,
+                                                                'house_number_addition', 'Hausnummernzusatz',
+                                                                cleaned_input):
+                    return
 
+                await self._confirm_field(turn_context, "Hausnummernzusatz", cleaned_input,
+                                          DialogState.CONFIRM_PREFIX + "house_addition")
+            else:
+                # Ungültiger Hausnummernzusatz
+                error_message = (
+                    "Entschuldigung, das ist kein gültiger Hausnummernzusatz. "
+                    "Bitte verwenden Sie Formate wie: A, B, /1, -2, 1a, oder sagen Sie 'kein Zusatz'."
+                )
+                await self._send_audio_response(turn_context, error_message)
 
     async def _ask_for_postal(self, turn_context: TurnContext):
         """Ask for postal code"""
