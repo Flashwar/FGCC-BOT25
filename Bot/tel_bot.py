@@ -375,7 +375,7 @@ class RegistrationAudioBot(ActivityHandler):
         Keine Chunks, keine Kompression - einfach und direkt.
         """
         try:
-            print(f"🔊 Versuche Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+            print(f" Versuche Audio für: '{text[:100]}{'...' if len(text) > 100 else ''}'")
 
             # Prüfe ob Speech Service verfügbar
             if not self.speech_service:
@@ -503,13 +503,13 @@ class RegistrationAudioBot(ActivityHandler):
             clean_text = self._convert_markdown_to_speech(text)
 
             # Füge Audio-Symbol hinzu um zu zeigen dass es ein Audio-Bot ist
-            complete_message = f"🔊 {clean_text}"
+            complete_message = "clean_text"
 
             await turn_context.send_activity(MessageFactory.text(complete_message))
-            print(f"📝 Kompletten Text gesendet: {len(complete_message)} Zeichen")
+            print(f" Kompletten Text gesendet: {len(complete_message)} Zeichen")
 
         except Exception as e:
-            print(f"❌ Text-Fallback fehlgeschlagen: {e}")
+            print(f"Text-Fallback fehlgeschlagen: {e}")
             # Letzter Notfall
             try:
                 await turn_context.send_activity(MessageFactory.text("🔊 Kommunikationsfehler"))
