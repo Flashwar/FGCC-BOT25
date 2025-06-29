@@ -112,13 +112,19 @@ class RegistrationAudioBot(ActivityHandler):
     # === MAIN MESSAGE HANDLING ===
 
     async def on_message_activity(self, turn_context: TurnContext):
-        """Main message handler - processes only audio input"""
+        """Main message handler - processes audio input and /start command"""
         print("\n" + "=" * 50)
         print("🎤 AUDIO MESSAGE RECEIVED")
         print("=" * 50)
 
         try:
-            # Extract and validate input (audio only)
+            # Check for /start command FIRST (before audio validation)
+            text_input = turn_context.activity.text
+            if text_input and text_input.strip().lower() == '/start':
+                await self._handle_start_command(turn_context)
+                return
+
+            # Extract and validate input (audio only for normal flow)
             user_input = await self._extract_and_validate_input(turn_context)
             if user_input is None:
                 return
@@ -159,35 +165,57 @@ class RegistrationAudioBot(ActivityHandler):
                                             "Entschuldigung, es gab einen Fehler. Bitte versuchen Sie es erneut.")
 
     async def on_members_added_activity(self, members_added: [ChannelAccount], turn_context: TurnContext):
-        """Handle new members joining"""
+        """Handle new members joining - send welcome with /start instruction"""
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
                 await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
-                await self._handle_greeting(turn_context,
-                                            await self.user_profile_accessor.get(turn_context, lambda: {}))
+
+                # Send welcome message with /start instruction
+                welcome_text = (
+                    "Willkommen! Ich bin Ihr Audio-Registrierungsassistent. "
+                    "Schreiben Sie /start um die Registrierung zu beginnen, "
+                    "oder senden Sie eine Sprachnachricht."
+                )
+                await self._send_audio_and_text_response(turn_context, welcome_text)
                 break
+        await self._save_state(turn_context)
+
+    async def _handle_start_command(self, turn_context: TurnContext):
+        """Handle /start command to begin or restart registration"""
+        print(" /start command received")
+
+        # Reset everything and start fresh
+        await self.user_profile_accessor.set(turn_context, {})
+        await self.dialog_state_accessor.set(turn_context, DialogState.GREETING)
+
+        # Start new registration
+        await self._handle_greeting(turn_context, {})
         await self._save_state(turn_context)
 
     # === INPUT VALIDATION AND PROCESSING ===
 
     async def _extract_and_validate_input(self, turn_context: TurnContext) -> Optional[str]:
-        """Extract and validate audio input, reject text input"""
+        """Extract and validate audio input, reject other text input (except /start)"""
         attachments = turn_context.activity.attachments or []
         audio_attachments = [att for att in attachments if att.content_type in self.supported_audio_types]
         text_input = turn_context.activity.text
 
-        # Reject text input
+        # Allow /start command (already handled in main method)
+        if text_input and text_input.strip().lower() == '/start':
+            return None  # This should not reach here as it's handled earlier
+
+        # Reject other text input
         if text_input and text_input.strip() and not audio_attachments:
-            print(f"❌ Text input rejected: '{text_input}'")
-            await self._send_audio_response(turn_context,
-                                            "Entschuldigung, ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht.")
+            print(f"❌ Text input rejected: '{text_input}' (only /start allowed)")
+            await self._send_audio_and_text_response(turn_context,
+                                                     "Entschuldigung, ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht oder verwenden Sie /start zum Neubeginn.")
             return None
 
         # Require audio input
         if not audio_attachments:
             print("❌ No audio input detected")
-            await self._send_audio_response(turn_context,
-                                            "Hallo! Ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht.")
+            await self._send_audio_and_text_response(turn_context,
+                                                     "Hallo! Ich bin ein Sprach-Bot. Bitte senden Sie mir eine Sprachnachricht oder schreiben Sie /start.")
             return None
 
         # Process audio input
@@ -285,7 +313,7 @@ class RegistrationAudioBot(ActivityHandler):
             print(f"🔍 CLU entities for {entity_type}: {entities}")
 
             for entity in entities:
-                entity_name = entity.get('name', '')
+                entity_name = entity.get('category', '') or entity.get('name', '')
                 entity_text = entity.get('text', '')
 
                 if entity_name == entity_type:
@@ -299,13 +327,40 @@ class RegistrationAudioBot(ActivityHandler):
             print(f"❌ CLU extraction error for {entity_type}: {e}")
             return None
 
+    async def _extract_confirmation_with_clu(self, user_input: str) -> Optional[str]:
+        """Extract confirmation response using CLU (yes/no)"""
+        if not self.clu_service:
+            print("⚠️ CLU service not available for confirmation")
+            return None
+
+        try:
+            entities = await self.clu_service.get_entities(text=user_input)
+            print(f"🔍 CLU entities for confirmation: {entities}")
+
+            # Look for ConfirmationAnswer entity
+            for entity in entities:
+                entity_category = entity.get('category', '') or entity.get('name', '')
+                entity_key = entity.get('key', '')
+                entity_text = entity.get('text', '')
+
+                if entity_category == 'ConfirmationAnswer':
+                    print(f"✅ ConfirmationAnswer found: key='{entity_key}', text='{entity_text}'")
+                    return entity_key.lower()  # Return 'yes' or 'no'
+
+            print("❌ No ConfirmationAnswer entity found")
+            return None
+
+        except Exception as e:
+            print(f"❌ CLU confirmation extraction error: {e}")
+            return None
+
     # === AUDIO OUTPUT ===
 
     async def _send_audio_response(self, turn_context: TurnContext, text: str):
-        """Send audio response with multiple attachment methods"""
+        """Send ONLY audio response (no duplicate text)"""
         try:
             if not self.speech_service:
-                # Fallback to text if TTS unavailable
+                # Fallback to text only if TTS unavailable
                 await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
                 return
 
@@ -316,6 +371,7 @@ class RegistrationAudioBot(ActivityHandler):
             audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
 
             if not audio_bytes:
+                # Fallback to text if audio generation fails
                 await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
                 return
 
@@ -335,7 +391,28 @@ class RegistrationAudioBot(ActivityHandler):
 
         except Exception as e:
             print(f"❌ Audio response error: {e}")
+            # Send text fallback
             await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+
+    async def _send_audio_and_text_response(self, turn_context: TurnContext, text: str):
+        """Send both audio and text response for maximum accessibility"""
+        try:
+            # Send text first for immediate feedback
+            await turn_context.send_activity(MessageFactory.text(f"🔊 {text}"))
+
+            # Then try to send audio
+            if self.speech_service:
+                speech_text = self._convert_text_for_speech(text)
+                audio_bytes = self.speech_service.text_to_speech_bytes(speech_text)
+
+                if audio_bytes and len(audio_bytes) <= 250000:
+                    await self._send_audio_with_fallback(turn_context, audio_bytes)
+                elif audio_bytes:
+                    # If too large, send chunked
+                    await self._send_chunked_audio(turn_context, speech_text)
+
+        except Exception as e:
+            print(f"❌ Audio+Text response error: {e}")
 
     async def _send_audio_with_fallback(self, turn_context: TurnContext, audio_bytes: bytes) -> bool:
         """Try multiple methods to send audio"""
@@ -524,16 +601,33 @@ class RegistrationAudioBot(ActivityHandler):
 
     async def _handle_consent_input(self, turn_context: TurnContext, user_profile, user_input):
         """Handle consent with CLU integration"""
-        user_input_lower = user_input.lower().strip()
 
-        if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
+        # Try CLU confirmation extraction first
+        clu_confirmation = await self._extract_confirmation_with_clu(user_input)
+
+        consent_given = False
+        consent_denied = False
+
+        if clu_confirmation:
+            # Use CLU result
+            consent_given = clu_confirmation == 'yes'
+            consent_denied = clu_confirmation == 'no'
+            print(f"🔍 CLU consent: {clu_confirmation} -> given={consent_given}, denied={consent_denied}")
+        else:
+            # Fallback to manual detection
+            user_input_lower = user_input.lower().strip()
+            consent_given = any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES)
+            consent_denied = any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES)
+            print(f"🔄 Manual consent: '{user_input_lower}' -> given={consent_given}, denied={consent_denied}")
+
+        if consent_given:
             await self._send_audio_response(turn_context, SpeechBotMessages.CONSENT_GRANTED)
             user_profile['consent_given'] = True
             user_profile['consent_timestamp'] = datetime.now().isoformat()
             await self.user_profile_accessor.set(turn_context, user_profile)
             await self._ask_for_gender(turn_context)
 
-        elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
+        elif consent_denied:
             await self._send_audio_response(turn_context, SpeechBotMessages.CONSENT_DENIED)
             await self.dialog_state_accessor.set(turn_context, DialogState.COMPLETED)
             await self.user_profile_accessor.set(turn_context, {
@@ -979,12 +1073,26 @@ class RegistrationAudioBot(ActivityHandler):
         await self._send_audio_response(turn_context, confirmation_message)
         await self.dialog_state_accessor.set(turn_context, confirmation_state)
 
-
     async def _handle_confirmation(self, turn_context: TurnContext, user_profile, user_input, dialog_state):
-        """Handle confirmation responses"""
-        user_input_lower = user_input.lower()
-        confirmed = user_input_lower in FieldConfig.CONFIRMATION_YES
-        rejected = user_input_lower in FieldConfig.CONFIRMATION_NO
+        """Handle confirmation responses with CLU integration"""
+
+        # Try CLU confirmation extraction first
+        clu_confirmation = await self._extract_confirmation_with_clu(user_input)
+
+        confirmed = False
+        rejected = False
+
+        if clu_confirmation:
+            # Use CLU result
+            confirmed = clu_confirmation == 'yes'
+            rejected = clu_confirmation == 'no'
+            print(f"🔍 CLU confirmation: {clu_confirmation} -> confirmed={confirmed}, rejected={rejected}")
+        else:
+            # Fallback to manual detection
+            user_input_lower = user_input.lower()
+            confirmed = user_input_lower in FieldConfig.CONFIRMATION_YES
+            rejected = user_input_lower in FieldConfig.CONFIRMATION_NO
+            print(f"🔄 Manual confirmation: '{user_input_lower}' -> confirmed={confirmed}, rejected={rejected}")
 
         if confirmed:
             # Find next step in dialog flow
@@ -1013,6 +1121,7 @@ class RegistrationAudioBot(ActivityHandler):
                                                 "Entschuldigung, ich kann diesen Schritt nicht korrigieren.")
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
         else:
+            # Neither confirmed nor rejected - ask for clarification
             await self._send_audio_response(turn_context, SpeechBotMessages.CONFIRMATION_UNCLEAR)
 
 
@@ -1023,12 +1132,31 @@ class RegistrationAudioBot(ActivityHandler):
         await self._send_audio_response(turn_context, summary_message)
         await self.dialog_state_accessor.set(turn_context, DialogState.FINAL_CONFIRMATION)
 
-
     async def _handle_final_confirmation(self, turn_context: TurnContext, user_profile, user_input):
-        """Handle final confirmation"""
-        user_input_lower = user_input.lower().strip()
+        """Handle final confirmation with CLU integration"""
 
-        if any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES):
+        # Try CLU confirmation extraction first
+        clu_confirmation = await self._extract_confirmation_with_clu(user_input)
+
+        save_data = False
+        start_correction = False
+        restart_requested = False
+
+        if clu_confirmation:
+            # Use CLU result
+            save_data = clu_confirmation == 'yes'
+            start_correction = clu_confirmation == 'no'
+            print(f"🔍 CLU final confirmation: {clu_confirmation} -> save={save_data}, correct={start_correction}")
+        else:
+            # Fallback to manual detection
+            user_input_lower = user_input.lower().strip()
+            save_data = any(response in user_input_lower for response in FieldConfig.POSITIVE_RESPONSES)
+            start_correction = any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES)
+            restart_requested = any(response in user_input_lower for response in FieldConfig.RESTART_KEYWORDS)
+            print(
+                f"🔄 Manual final confirmation: save={save_data}, correct={start_correction}, restart={restart_requested}")
+
+        if save_data:
             # Save data
             await self._send_audio_response(turn_context, SpeechBotMessages.SAVE_IN_PROGRESS)
 
@@ -1045,11 +1173,11 @@ class RegistrationAudioBot(ActivityHandler):
                 await self._send_audio_response(turn_context, SpeechBotMessages.SAVE_ERROR)
                 await self.dialog_state_accessor.set(turn_context, DialogState.ERROR)
 
-        elif any(response in user_input_lower for response in FieldConfig.NEGATIVE_RESPONSES):
+        elif start_correction:
             # Start correction process
             await self._start_correction_process(turn_context, user_profile)
 
-        elif any(response in user_input_lower for response in FieldConfig.RESTART_KEYWORDS):
+        elif restart_requested:
             # Complete restart
             await self._handle_restart_request(turn_context)
 

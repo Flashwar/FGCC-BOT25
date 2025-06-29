@@ -74,9 +74,19 @@ class AzureCLUService:
         entity_list = prediction.get("entities", [])
 
         for entity in entity_list:
-            entities.append({
-                "name": entity.get("category", ""),
+            # extract information
+            entity_data = {
+                "category": entity.get("category", ""),
                 "text": entity.get("text", "")
-            })
+            }
+
+            # ckeck if extra information are there (List)
+            extra_info = entity.get("extraInformation", [])
+            for info in extra_info:
+                if info.get("extraInformationKind") == "ListKey":
+                    entity_data["key"] = info.get("key", "")
+                    break
+
+            entities.append(entity_data)
 
         return entities
