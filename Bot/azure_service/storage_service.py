@@ -15,22 +15,10 @@ class BlobService:
 
         if self.connection_string:
             self.blob_service_client = BlobServiceClient.from_connection_string(self.connection_string)
-            self._ensure_container_exists()
             print("Azure Blob Storage initialized with Connection String")
         else:
             self.blob_service_client = None
             print("⚠️ Azure Storage Connection String not found")
-
-    def _ensure_container_exists(self):
-        # Create the container if it doesn't exist (with SAS-compatible public access)
-        try:
-            container_client = self.blob_service_client.get_container_client(self.container_name)
-            if not container_client.exists():
-                print(f"Container '{self.container_name}' created with public access")
-            else:
-                print(f"Container '{self.container_name}' already exists")
-        except Exception as e:
-            print(f"Container check failed: {e}")
 
     async def upload_audio_blob(self, audio_bytes: bytes, content_type: str = "audio/wav"):
         # Uploads audio to Azure Blob Storage and returns the SAS URL
